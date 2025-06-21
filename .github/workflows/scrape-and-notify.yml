@@ -1,0 +1,12 @@
+name: Scrape XP and Notify
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+jobs:
+  scrape-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      # ... your steps here ...
