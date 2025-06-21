@@ -64,6 +64,12 @@ def post_to_discord(message):
     except Exception as e:
         print(f"Exception posting to Discord: {e}")
 
+def xp_str_to_int(xp_str):
+    try:
+        return int(xp_str.replace(",", "").replace("+", "").strip())
+    except Exception:
+        return 0
+
 if __name__ == "__main__":
     characters = load_characters()
     all_xp = {}
@@ -84,31 +90,45 @@ if __name__ == "__main__":
             exit()
         latest_date = max(latest_dates)
 
-        # Prepare list of (name, xp_value) for the latest date
+        # Prepare leaderboard with XP change, up arrow, only increases
         daily_xp_ranking = []
         for name, xp_dict in all_xp.items():
-            xp_str = xp_dict.get(latest_date, "0").replace(",", "").replace("+", "").strip()
-            try:
-                xp_val = int(xp_str)
-            except ValueError:
-                xp_val = 0
-            daily_xp_ranking.append((name, xp_val))
+            xp_raw = xp_dict.get(latest_date, None)
+            if not xp_raw or "+" not in xp_raw:
+                continue  # Skip if no gain
+            xp_val = xp_str_to_int(xp_raw)
+            if xp_val <= 0:
+                continue  # Only positive increases
+            line_arrow = "⬆️"
+            daily_xp_ranking.append((name, xp_val, line_arrow, xp_raw))
 
         # Sort descending by XP
         daily_xp_ranking.sort(key=lambda x: x[1], reverse=True)
 
-        # Assign medals for top 3
+        if not daily_xp_ranking:
+            print("No XP increases today.")
+            post_to_discord(f"📉 No XP increases for any tracked characters on {latest_date}.")
+            exit()
+
         medals = ["🥇", "🥈", "🥉"]
         medaled_output = []
-        print(f"\n🏆 Daily XP Gains for {latest_date}:")
-        for idx, (name, xp_val) in enumerate(daily_xp_ranking):
+        for idx, (name, xp_val, arrow, xp_raw) in enumerate(daily_xp_ranking):
             medal = medals[idx] if idx < 3 else ""
-            line = f"{medal} {name}: {xp_val:,} XP" if medal else f"{name}: {xp_val:,} XP"
-            print(line)
+            bold_name = f"**{name}**" if idx < 3 else name
+            xp_disp = f"+{xp_val:,}"
+            line = f"{medal} {bold_name}: {xp_disp} XP {arrow}".strip()
             medaled_output.append(line)
 
-        # Send to Discord
-        message = f"🏆 Daily XP Gains for {latest_date}:\n" + "\n".join(medaled_output)
+        top_gainer = daily_xp_ranking[0][0] if daily_xp_ranking else "N/A"
+
+        # Spruced up Discord message
+        message = (
+            f"🏆 **Daily XP Leaderboard: {latest_date}** 🏆\n\n"
+            + "\n".join(medaled_output)
+            + f"\n\n**Top Gainer:** **{top_gainer}** 🎉\n"
+            + "*Keep grinding, heroes!*"
+        )
+        print(message)
         post_to_discord(message)
 
         # Commit & push changes to GitHub
