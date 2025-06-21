@@ -2,15 +2,19 @@ import requests
 import json
 import os
 from bs4 import BeautifulSoup
+from datetime import datetime
 
 CHAR_FILE = "characters.txt"
 JSON_PATH = "xp_log.json"
+
+# Tibia style colors and icons
+TIBIA_ICON = "https://www.tibia.com/img/tibiacom/tibia-logo-big.png"
+GOLD = 0xFFD700
 
 def scrape_xp_tab9(char_name):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     response = requests.get(url)
     soup = BeautifulSoup(response.text, "html.parser")
-    # Target only the table inside <div id="tabs1" ...>
     tabs1_div = soup.find("div", id="tabs1")
     if not tabs1_div:
         print(f"No tabs1 div found for {char_name} on tab 9.")
@@ -20,7 +24,7 @@ def scrape_xp_tab9(char_name):
         print(f"No XP table found for {char_name} on tab 9.")
         return {}
     xp_data = {}
-    for row in table.find_all("tr")[1:]:  # skip header
+    for row in table.find_all("tr")[1:]:
         tds = row.find_all("td")
         if len(tds) < 2:
             continue
@@ -49,12 +53,27 @@ def save_if_changed(data):
     print("XP data updated.")
     return True
 
-def post_to_discord(message):
+def post_to_discord_tibia_style(title, leaderboard_lines, top_gainer, date_str):
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:
         print("DISCORD_WEBHOOK_URL environment variable not set. Skipping Discord notification.")
         return
-    payload = {"content": message}
+    embed = {
+        "title": f"🏆 {title} ({date_str})",
+        "description": "\n".join(leaderboard_lines) + f"\n\n**Top Gainer:** **{top_gainer}** 🎉\n*Keep grinding, heroes!*",
+        "color": GOLD,
+        "footer": {
+            "text": "Tibia XP Leaderboard • tibia.com style",
+            "icon_url": TIBIA_ICON
+        },
+        "thumbnail": {"url": TIBIA_ICON}
+    }
+    payload = {
+        "username": "Tibia Notifications",
+        "avatar_url": TIBIA_ICON,
+        "embeds": [embed],
+        "allowed_mentions": {"parse": []}
+    }
     try:
         resp = requests.post(webhook_url, json=payload)
         if resp.status_code in (200, 204):
@@ -107,7 +126,12 @@ if __name__ == "__main__":
 
         if not daily_xp_ranking:
             print("No XP increases today.")
-            post_to_discord(f"📉 No XP increases for any tracked characters on {latest_date}.")
+            post_to_discord_tibia_style(
+                "Daily XP Leaderboard", 
+                ["📉 No XP increases for any tracked characters."],
+                "N/A",
+                latest_date
+            )
             exit()
 
         medals = ["🥇", "🥈", "🥉"]
@@ -121,15 +145,13 @@ if __name__ == "__main__":
 
         top_gainer = daily_xp_ranking[0][0] if daily_xp_ranking else "N/A"
 
-        # Spruced up Discord message
-        message = (
-            f"🏆 **Daily XP Leaderboard: {latest_date}** 🏆\n\n"
-            + "\n".join(medaled_output)
-            + f"\n\n**Top Gainer:** **{top_gainer}** 🎉\n"
-            + "*Keep grinding, heroes!*"
+        # Tibia-styled Discord embed
+        post_to_discord_tibia_style(
+            "Daily XP Leaderboard",
+            medaled_output,
+            top_gainer,
+            latest_date
         )
-        print(message)
-        post_to_discord(message)
 
         # Commit & push changes to GitHub
         os.system("git config user.name github-actions")
