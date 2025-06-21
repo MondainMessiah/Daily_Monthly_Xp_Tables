@@ -1,0 +1,34 @@
+name: Scrape XP and Post to Discord
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *'  # every day at 8:00 UTC
+
+jobs:
+  scrape-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run XP scraper and post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python scrape_xp_tab9.py
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "github-actions"
+          git add xp_log.json
+          git commit -m "Update xp_log.json" || echo "No changes to commit"
+          git pull --rebase || echo "Nothing to rebase"
+          git push || echo "Push failed (possibly due to no new commit or branch protection)"
