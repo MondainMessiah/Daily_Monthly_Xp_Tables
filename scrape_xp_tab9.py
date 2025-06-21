@@ -10,10 +10,14 @@ def scrape_xp_tab9(char_name):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     response = requests.get(url)
     soup = BeautifulSoup(response.text, "html.parser")
-    # Updated: Use the specific table path as per the provided XPath
-    table = soup.select_one("body > main > div > div.container > div > div.row > div.col-md-6 > div > div:nth-of-type(3) > table")
+    # Target only the table inside <div id="tabs1" ...>
+    tabs1_div = soup.find("div", id="tabs1")
+    if not tabs1_div:
+        print(f"No tabs1 div found for {char_name} on tab 9.")
+        return {}
+    table = tabs1_div.find("table", class_="newTable")
     if not table:
-        print(f"No XP data found for {char_name} on tab 9.")
+        print(f"No XP table found for {char_name} on tab 9.")
         return {}
     xp_data = {}
     for row in table.find_all("tr")[1:]:  # skip header
