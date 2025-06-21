@@ -10,7 +10,8 @@ def scrape_xp_tab9(char_name):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     response = requests.get(url)
     soup = BeautifulSoup(response.text, "html.parser")
-    table = soup.find("table")
+    # Updated: Use the specific table path as per the provided XPath
+    table = soup.select_one("body > main > div > div.container > div > div.row > div.col-md-6 > div > div:nth-of-type(3) > table")
     if not table:
         print(f"No XP data found for {char_name} on tab 9.")
         return {}
