@@ -2,15 +2,17 @@ import requests
 import json
 import os
 from bs4 import BeautifulSoup
+import datetime
+import calendar
 
 CHAR_FILE = "characters.txt"
 JSON_PATH = "xp_log.json"
+MONTHLY_XP_PATH = "monthly_xp.json"
 
 def scrape_xp_tab9(char_name):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     response = requests.get(url)
     soup = BeautifulSoup(response.text, "html.parser")
-    # Target only the table inside <div id="tabs1" ...>
     tabs1_div = soup.find("div", id="tabs1")
     if not tabs1_div:
         print(f"No tabs1 div found for {char_name} on tab 9.")
@@ -70,6 +72,25 @@ def xp_str_to_int(xp_str):
     except Exception:
         return 0
 
+def load_monthly_xp(characters):
+    if os.path.exists(MONTHLY_XP_PATH):
+        with open(MONTHLY_XP_PATH, "r") as f:
+            data = json.load(f)
+    else:
+        data = {"month": "", "totals": {name: 0 for name in characters}}
+    # Ensure all characters are present
+    for name in characters:
+        if name not in data["totals"]:
+            data["totals"][name] = 0
+    return data
+
+def save_monthly_xp(data):
+    with open(MONTHLY_XP_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
+def get_current_month():
+    return datetime.datetime.now().strftime("%Y-%m")
+
 if __name__ == "__main__":
     characters = load_characters()
     all_xp = {}
@@ -125,7 +146,7 @@ if __name__ == "__main__":
 
         top_gainer = daily_xp_ranking[0][0] if daily_xp_ranking else "N/A"
 
-        # Spruced up Discord message
+        # Daily leaderboard message
         message = (
             f"🏆 **Daily XP Leaderboard: {latest_date}** 🏆\n\n"
             + "\n".join(medaled_output)
@@ -135,10 +156,55 @@ if __name__ == "__main__":
         print(message)
         post_to_discord(message)
 
+        # --- Monthly XP Logic (update every day, post only on last day) ---
+        monthly_xp = load_monthly_xp(characters)
+        current_month = get_current_month()
+
+        # Reset if new month
+        if monthly_xp["month"] != current_month:
+            print(f"New month detected ({current_month}), resetting monthly totals.")
+            monthly_xp = {"month": current_month, "totals": {name: 0 for name in characters}}
+
+        # Update monthly XP totals
+        for name, xp_dict in all_xp.items():
+            xp_raw = xp_dict.get(latest_date, None)
+            if not xp_raw or "+" not in xp_raw:
+                continue
+            xp_val = xp_str_to_int(xp_raw)
+            if xp_val <= 0:
+                continue
+            monthly_xp["totals"][name] = monthly_xp["totals"].get(name, 0) + xp_val
+
+        save_monthly_xp(monthly_xp)
+
+        # --- Post monthly leaderboard ONLY on last day of the month ---
+        today = datetime.date.today()
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        if today.day == last_day:
+            monthly_ranking = sorted(monthly_xp["totals"].items(), key=lambda x: x[1], reverse=True)
+            monthly_leaderboard = []
+            for idx, (name, total_xp) in enumerate(monthly_ranking):
+                if total_xp <= 0:
+                    continue
+                prefix = medals[idx] if idx < 3 else "🏳️"
+                bold_name = f"**{name}**" if idx < 3 else name
+                line = f"{prefix} {bold_name}: +{total_xp:,} XP"
+                monthly_leaderboard.append(line)
+
+            if monthly_leaderboard:
+                monthly_msg = (
+                    f"🏆 **Monthly XP Leaderboard: {current_month}** 🏆\n\n"
+                    + "\n".join(monthly_leaderboard)
+                    + f"\n\n**Top Gainer:** **{monthly_ranking[0][0]}** 🎉\n"
+                    + "**"
+                )
+                print(monthly_msg)
+                post_to_discord(monthly_msg)
+
         # Commit & push changes to GitHub
         os.system("git config user.name github-actions")
         os.system("git config user.email github-actions@github.com")
-        os.system("git add xp_log.json")
+        os.system("git add xp_log.json monthly_xp.json")
         commit_message = f"Daily XP update {latest_date}\n" + "\n".join(medaled_output)
         os.system(f'git commit -m "{commit_message}" || echo "No changes to commit"')
         os.system("git pull --rebase || echo 'Nothing to rebase'")
