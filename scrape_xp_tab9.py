@@ -113,10 +113,14 @@ if __name__ == "__main__":
         medals = ["🥇", "🥈", "🥉"]
         medaled_output = []
         for idx, (name, xp_val, arrow, xp_raw) in enumerate(daily_xp_ranking):
-            medal = medals[idx] if idx < 3 else ""
-            bold_name = f"**{name}**" if idx < 3 else name
+            if idx < 3:
+                prefix = medals[idx]
+                bold_name = f"**{name}**"
+            else:
+                prefix = "🏳️"
+                bold_name = name
             xp_disp = f"+{xp_val:,}"
-            line = f"{medal} {bold_name}: {xp_disp} XP {arrow}".strip()
+            line = f"{prefix} {bold_name}: {xp_disp} XP {arrow}".strip()
             medaled_output.append(line)
 
         top_gainer = daily_xp_ranking[0][0] if daily_xp_ranking else "N/A"
