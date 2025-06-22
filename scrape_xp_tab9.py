@@ -126,7 +126,7 @@ if __name__ == "__main__":
             f"🏆 **Daily XP Leaderboard: {latest_date}** 🏆\n\n"
             + "\n".join(medaled_output)
             + f"\n\n**Top Gainer:** **{top_gainer}** 🎉\n"
-            + "*Keep grinding, heroes!*"
+            + "**"
         )
         print(message)
         post_to_discord(message)
