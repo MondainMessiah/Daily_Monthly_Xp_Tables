@@ -51,12 +51,22 @@ def save_if_changed(data):
     print("XP data updated.")
     return True
 
-def post_to_discord(message):
+def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, footer="Hunt well, adventurers!"):
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:
         print("DISCORD_WEBHOOK_URL environment variable not set. Skipping Discord notification.")
         return
-    payload = {"content": message}
+    embed = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "footer": {"text": footer}
+    }
+    if fields:
+        embed["fields"] = fields
+    payload = {
+        "embeds": [embed]
+    }
     try:
         resp = requests.post(webhook_url, json=payload)
         if resp.status_code in (200, 204):
@@ -81,16 +91,12 @@ def load_monthly_xp(characters):
         except Exception as e:
             print(f"Failed to load {MONTHLY_XP_PATH}, resetting: {e}")
             data = {}
-
-    # Always ensure the correct structure
     if not isinstance(data, dict):
         data = {}
     if "month" not in data or not isinstance(data["month"], str):
         data["month"] = ""
     if "totals" not in data or not isinstance(data["totals"], dict):
         data["totals"] = {name: 0 for name in characters}
-
-    # Ensure all characters are present
     for name in characters:
         if name not in data["totals"]:
             data["totals"][name] = 0
@@ -104,7 +110,6 @@ def get_current_month():
     return datetime.datetime.now().strftime("%Y-%m")
 
 def get_ordinal(n):
-    # Returns 4th, 5th, 6th, etc.
     if 10 <= n % 100 <= 20:
         suffix = 'th'
     else:
@@ -124,67 +129,66 @@ if __name__ == "__main__":
         exit()
 
     if save_if_changed(all_xp):
-        # Determine latest date with XP data across all characters
         latest_dates = [max(xp.keys()) for xp in all_xp.values() if xp]
         if not latest_dates:
             print("No XP dates found.")
             exit()
         latest_date = max(latest_dates)
-
-        # Prepare leaderboard with XP change, up arrow, only increases
         daily_xp_ranking = []
         for name, xp_dict in all_xp.items():
             xp_raw = xp_dict.get(latest_date, None)
             if not xp_raw or "+" not in xp_raw:
-                continue  # Skip if no gain
+                continue
             xp_val = xp_str_to_int(xp_raw)
             if xp_val <= 0:
-                continue  # Only positive increases
+                continue
             line_arrow = "⬆️"
             daily_xp_ranking.append((name, xp_val, line_arrow, xp_raw))
-
-        # Sort descending by XP
         daily_xp_ranking.sort(key=lambda x: x[1], reverse=True)
-
         if not daily_xp_ranking:
             print("No XP increases today.")
-            post_to_discord(f"📉 No XP increases for any tracked characters on {latest_date}.")
+            post_to_discord_embed(
+                "Tibia Daily XP Leaderboard",
+                f"📉 No XP increases for any tracked characters on {latest_date}.",
+                color=0x636e72
+            )
             exit()
 
         medals = ["🥇", "🥈", "🥉"]
-        medaled_output = []
+        fields = []
         for idx, (name, xp_val, arrow, xp_raw) in enumerate(daily_xp_ranking):
+            prefix = medals[idx] if idx < 3 else get_ordinal(idx+1)
             bold_name = f"**{name}**"
-            if idx < 3:
-                prefix = medals[idx]
-            else:
-                prefix = get_ordinal(idx+1)
-            xp_disp = f"+{xp_val:,}"
-            line = f"{prefix} {bold_name}: {xp_disp} XP {arrow}".strip()
-            medaled_output.append(line)
+            xp_disp = f"+{xp_val:,} XP"
+            value = f"{xp_disp} {arrow}"
+            fields.append({
+                "name": f"{prefix} {bold_name}",
+                "value": value,
+                "inline": False
+            })
 
         top_gainer = f"**{daily_xp_ranking[0][0]}**" if daily_xp_ranking else "N/A"
 
-        # Daily leaderboard message
-        message = (
-            f"🏆 **Daily XP Leaderboard: {latest_date}** 🏆\n\n"
-            + "\n".join(medaled_output)
-            + f"\n\n**Top Gainer:** {top_gainer} 🎉\n"
-            + "**"
+        title = "🟡🟢🔵 Tibia Daily XP Leaderboard 🔵🟢🟡"
+        description = (
+            f"_Who conquered the lands today?_\n\n"
+            f"👑 **Top Gainer:** {top_gainer} 👑\n"
+            f"📅 **Date:** {latest_date}"
         )
-        print(message)
-        post_to_discord(message)
+        post_to_discord_embed(
+            title=title,
+            description=description,
+            fields=fields,
+            color=0xf1c40f,
+            footer="🏆 Hunt well, adventurers! 🏆"
+        )
 
-        # --- Monthly XP Logic (update every day, post only on last day) ---
+        # --- Monthly leaderboard logic ---
         monthly_xp = load_monthly_xp(characters)
         current_month = get_current_month()
-
-        # Reset if new month
         if monthly_xp["month"] != current_month:
             print(f"New month detected ({current_month}), resetting monthly totals.")
             monthly_xp = {"month": current_month, "totals": {name: 0 for name in characters}}
-
-        # Update monthly XP totals
         for name, xp_dict in all_xp.items():
             xp_raw = xp_dict.get(latest_date, None)
             if not xp_raw or "+" not in xp_raw:
@@ -193,38 +197,43 @@ if __name__ == "__main__":
             if xp_val <= 0:
                 continue
             monthly_xp["totals"][name] = monthly_xp["totals"].get(name, 0) + xp_val
-
         save_monthly_xp(monthly_xp)
 
-        # --- Post monthly leaderboard ONLY on last day of the month ---
         today = datetime.date.today()
         last_day = calendar.monthrange(today.year, today.month)[1]
         if today.day == last_day:
             monthly_ranking = sorted(monthly_xp["totals"].items(), key=lambda x: x[1], reverse=True)
-            monthly_leaderboard = []
+            monthly_fields = []
             for idx, (name, total_xp) in enumerate(monthly_ranking):
                 if total_xp <= 0:
                     continue
-                bold_name = f"**{name}**"
                 prefix = medals[idx] if idx < 3 else get_ordinal(idx+1)
-                line = f"{prefix} {bold_name}: +{total_xp:,} XP"
-                monthly_leaderboard.append(line)
-
-            if monthly_leaderboard:
-                monthly_msg = (
-                    f"🏆 **Monthly XP Leaderboard: {current_month}** 🏆\n\n"
-                    + "\n".join(monthly_leaderboard)
-                    + f"\n\n**Top Gainer:** {bold_name if monthly_ranking else ''} 🎉\n"
-                    + "**"
-                )
-                print(monthly_msg)
-                post_to_discord(monthly_msg)
+                bold_name = f"**{name}**"
+                monthly_fields.append({
+                    "name": f"{prefix} {bold_name}",
+                    "value": f"+{total_xp:,} XP",
+                    "inline": False
+                })
+            monthly_top = f"**{monthly_ranking[0][0]}**" if monthly_ranking else ""
+            monthly_title = "🌙 Tibia Monthly XP Legends 🌙"
+            monthly_description = (
+                f"_A full month of adventure!_\n\n"
+                f"👑 **Top Gainer:** {monthly_top} 👑\n"
+                f"📅 **Month:** {current_month}"
+            )
+            post_to_discord_embed(
+                title=monthly_title,
+                description=monthly_description,
+                fields=monthly_fields,
+                color=0x2980b9,
+                footer="🏆 Until next month, keep hunting! 🏆"
+            )
 
         # Commit & push changes to GitHub
         os.system("git config user.name github-actions")
         os.system("git config user.email github-actions@github.com")
         os.system("git add xp_log.json monthly_xp.json")
-        commit_message = f"Daily XP update {latest_date}\n" + "\n".join(medaled_output)
+        commit_message = f"Daily XP update {latest_date}"
         os.system(f'git commit -m "{commit_message}" || echo "No changes to commit"')
         os.system("git pull --rebase || echo 'Nothing to rebase'")
         os.system("git push || echo 'Push failed (possibly due to no new commit or branch protection)'")
