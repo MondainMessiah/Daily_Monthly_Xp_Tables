@@ -73,11 +73,23 @@ def xp_str_to_int(xp_str):
         return 0
 
 def load_monthly_xp(characters):
+    data = {}
     if os.path.exists(MONTHLY_XP_PATH):
-        with open(MONTHLY_XP_PATH, "r") as f:
-            data = json.load(f)
-    else:
-        data = {"month": "", "totals": {name: 0 for name in characters}}
+        try:
+            with open(MONTHLY_XP_PATH, "r") as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"Failed to load {MONTHLY_XP_PATH}, resetting: {e}")
+            data = {}
+
+    # Always ensure the correct structure
+    if not isinstance(data, dict):
+        data = {}
+    if "month" not in data or not isinstance(data["month"], str):
+        data["month"] = ""
+    if "totals" not in data or not isinstance(data["totals"], dict):
+        data["totals"] = {name: 0 for name in characters}
+
     # Ensure all characters are present
     for name in characters:
         if name not in data["totals"]:
@@ -138,7 +150,7 @@ if __name__ == "__main__":
                 prefix = medals[idx]
                 bold_name = f"**{name}**"
             else:
-                prefix = "🏳️"
+                prefix = "💩"
                 bold_name = name
             xp_disp = f"+{xp_val:,}"
             line = f"{prefix} {bold_name}: {xp_disp} XP {arrow}".strip()
@@ -186,7 +198,7 @@ if __name__ == "__main__":
             for idx, (name, total_xp) in enumerate(monthly_ranking):
                 if total_xp <= 0:
                     continue
-                prefix = medals[idx] if idx < 3 else "🏳️"
+                prefix = medals[idx] if idx < 3 else "💩"
                 bold_name = f"**{name}**" if idx < 3 else name
                 line = f"{prefix} {bold_name}: +{total_xp:,} XP"
                 monthly_leaderboard.append(line)
