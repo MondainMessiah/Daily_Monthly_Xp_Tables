@@ -2,8 +2,10 @@ name: Daily XP Leaderboard
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # 7am UK time in summer (BST)
-    - cron: '0 7 * * *'   # 7am UK time in winter (GMT)
+    # 7am UK time in summer (BST) is 6am UTC
+    - cron: '0 6 * * *'
+    # 7am UK time in winter (GMT) is 7am UTC
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
 jobs:
