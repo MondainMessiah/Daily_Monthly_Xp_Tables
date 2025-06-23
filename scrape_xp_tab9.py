@@ -51,7 +51,7 @@ def save_if_changed(data):
     print("XP data updated.")
     return True
 
-def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, footer="Hunt well, adventurers!"):
+def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, footer=""):
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:
         print("DISCORD_WEBHOOK_URL environment variable not set. Skipping Discord notification.")
@@ -59,9 +59,10 @@ def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, foote
     embed = {
         "title": title,
         "description": description,
-        "color": color,
-        "footer": {"text": footer}
+        "color": color
     }
+    if footer:
+        embed["footer"] = {"text": footer}
     if fields:
         embed["fields"] = fields
     payload = {
@@ -171,7 +172,6 @@ if __name__ == "__main__":
 
         title = "🟡🟢🔵 Tibia Daily XP Leaderboard 🔵🟢🟡"
         description = (
-            f"_Who conquered the lands today?_\n\n"
             f"👑 **Top Gainer:** {top_gainer} 👑\n"
             f"📅 **Date:** {latest_date}"
         )
@@ -180,7 +180,7 @@ if __name__ == "__main__":
             description=description,
             fields=fields,
             color=0xf1c40f,
-            footer="🏆 Hunt well, adventurers! 🏆"
+            footer=""
         )
 
         # --- Monthly leaderboard logic ---
@@ -217,7 +217,6 @@ if __name__ == "__main__":
             monthly_top = f"**{monthly_ranking[0][0]}**" if monthly_ranking else ""
             monthly_title = "🌙 Tibia Monthly XP Legends 🌙"
             monthly_description = (
-                f"_A full month of adventure!_\n\n"
                 f"👑 **Top Gainer:** {monthly_top} 👑\n"
                 f"📅 **Month:** {current_month}"
             )
@@ -226,7 +225,7 @@ if __name__ == "__main__":
                 description=monthly_description,
                 fields=monthly_fields,
                 color=0x2980b9,
-                footer="🏆 Until next month, keep hunting! 🏆"
+                footer=""
             )
 
         # Commit & push changes to GitHub
