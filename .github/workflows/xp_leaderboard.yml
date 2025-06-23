@@ -21,26 +21,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4
 
-      - name: Run only at 7am UK time
-        id: check_time
-        run: |
-          current=$(TZ=Europe/London date +'%H:%M')
-          echo "Current UK time: $current"
-          if [ "$current" = "07:00" ]; then
-            echo "run_script=true" >> $GITHUB_OUTPUT
-          else
-            echo "run_script=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Run XP Leaderboard Script
-        if: steps.check_time.outputs.run_script == 'true'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python scrape_xp_tab9.py
 
       - name: Commit & Push Results
-        if: steps.check_time.outputs.run_script == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
