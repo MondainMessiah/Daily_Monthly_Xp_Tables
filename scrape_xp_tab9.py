@@ -103,6 +103,14 @@ def save_monthly_xp(data):
 def get_current_month():
     return datetime.datetime.now().strftime("%Y-%m")
 
+def get_ordinal(n):
+    # Returns 4th, 5th, 6th, etc.
+    if 10 <= n % 100 <= 20:
+        suffix = 'th'
+    else:
+        suffix = {1:'st',2:'nd',3:'rd'}.get(n%10, 'th')
+    return f"{n}{suffix}"
+
 if __name__ == "__main__":
     characters = load_characters()
     all_xp = {}
@@ -146,23 +154,22 @@ if __name__ == "__main__":
         medals = ["🥇", "🥈", "🥉"]
         medaled_output = []
         for idx, (name, xp_val, arrow, xp_raw) in enumerate(daily_xp_ranking):
+            bold_name = f"**{name}**"
             if idx < 3:
                 prefix = medals[idx]
-                bold_name = f"**{name}**"
             else:
-                prefix = "💩"
-                bold_name = name
+                prefix = get_ordinal(idx+1)
             xp_disp = f"+{xp_val:,}"
             line = f"{prefix} {bold_name}: {xp_disp} XP {arrow}".strip()
             medaled_output.append(line)
 
-        top_gainer = daily_xp_ranking[0][0] if daily_xp_ranking else "N/A"
+        top_gainer = f"**{daily_xp_ranking[0][0]}**" if daily_xp_ranking else "N/A"
 
         # Daily leaderboard message
         message = (
             f"🏆 **Daily XP Leaderboard: {latest_date}** 🏆\n\n"
             + "\n".join(medaled_output)
-            + f"\n\n**Top Gainer:** **{top_gainer}** 🎉\n"
+            + f"\n\n**Top Gainer:** {top_gainer} 🎉\n"
             + "**"
         )
         print(message)
@@ -198,8 +205,8 @@ if __name__ == "__main__":
             for idx, (name, total_xp) in enumerate(monthly_ranking):
                 if total_xp <= 0:
                     continue
-                prefix = medals[idx] if idx < 3 else "💩"
-                bold_name = f"**{name}**" if idx < 3 else name
+                bold_name = f"**{name}**"
+                prefix = medals[idx] if idx < 3 else get_ordinal(idx+1)
                 line = f"{prefix} {bold_name}: +{total_xp:,} XP"
                 monthly_leaderboard.append(line)
 
@@ -207,7 +214,7 @@ if __name__ == "__main__":
                 monthly_msg = (
                     f"🏆 **Monthly XP Leaderboard: {current_month}** 🏆\n\n"
                     + "\n".join(monthly_leaderboard)
-                    + f"\n\n**Top Gainer:** **{monthly_ranking[0][0]}** 🎉\n"
+                    + f"\n\n**Top Gainer:** {bold_name if monthly_ranking else ''} 🎉\n"
                     + "**"
                 )
                 print(monthly_msg)
