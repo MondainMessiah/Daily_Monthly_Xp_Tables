@@ -215,7 +215,7 @@ if __name__ == "__main__":
                     "inline": False
                 })
             monthly_top = f"**{monthly_ranking[0][0]}**" if monthly_ranking else ""
-            monthly_title = "🌙 Tibia Monthly XP Legends 🌙"
+            monthly_title = "🟡🟢🔵 Total Monthly XP Table 🔵🟢🟡 "
             monthly_description = (
                 f"👑 **Top Gainer:** {monthly_top} 👑\n"
                 f"📅 **Month:** {current_month}"
