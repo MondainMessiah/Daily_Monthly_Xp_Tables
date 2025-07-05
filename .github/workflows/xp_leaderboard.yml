@@ -32,7 +32,7 @@ jobs:
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
-          git add xp_log.json monthly_xp.json
+          git add xp_log.json monthly_xp.json best_daily_xp.json
           git diff --cached --quiet || git commit -m "Automated daily XP update"
           git pull --rebase --autostash
           git push
