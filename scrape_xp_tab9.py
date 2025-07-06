@@ -9,8 +9,8 @@ import time
 
 CHAR_FILE = "characters.txt"
 JSON_PATH = "xp_log.json"
-BEST_DAILY_PATH = "best_daily_xp.json"
 MONTHLY_XP_PATH = "monthly_xp.json"
+BEST_DAILY_XP_PATH = "best_daily_xp.json"
 
 def timestamp():
     return time.strftime("[%Y-%m-%d %H:%M:%S]")
@@ -119,6 +119,19 @@ def save_monthly_xp(data):
     with open(MONTHLY_XP_PATH, "w") as f:
         json.dump(data, f, indent=2)
 
+def load_best_daily_xp():
+    if os.path.exists(BEST_DAILY_XP_PATH):
+        try:
+            with open(BEST_DAILY_XP_PATH, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"{timestamp()} Failed to load {BEST_DAILY_XP_PATH}, resetting: {e}")
+    return {}
+
+def save_best_daily_xp(data):
+    with open(BEST_DAILY_XP_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+
 def get_current_month():
     return datetime.datetime.now().strftime("%Y-%m")
 
@@ -139,50 +152,6 @@ def run_git_command(args, timeout=30):
     except subprocess.TimeoutExpired:
         print(f"{timestamp()} Git command timed out: {' '.join(args)}")
 
-def load_json(path):
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-
-def update_best_daily_xp(all_xp):
-    best_daily = load_json(BEST_DAILY_PATH)
-
-    # Find the latest date across all characters in current scrape
-    all_dates = []
-    for xp_data in all_xp.values():
-        all_dates.extend(xp_data.keys())
-    if not all_dates:
-        print(f"{timestamp()} No dates found in scraped data to update best daily XP.")
-        return
-    latest_date = max(all_dates)
-
-    updated = False
-    for char, xp_data in all_xp.items():
-        xp_str = xp_data.get(latest_date)
-        if not xp_str or "+" not in xp_str:
-            continue
-        xp_val = xp_str_to_int(xp_str)
-        if xp_val <= 0:
-            continue
-
-        record = best_daily.get(char, {})
-        best_xp_val = record.get("xp", 0)
-        if xp_val > best_xp_val:
-            best_daily[char] = {"date": latest_date, "xp": xp_val}
-            print(f"{timestamp()} New best daily XP for {char}: {xp_val} on {latest_date}")
-            updated = True
-
-    if updated:
-        save_json(BEST_DAILY_PATH, best_daily)
-        print(f"{timestamp()} best_daily_xp.json updated.")
-    else:
-        print(f"{timestamp()} No new best daily XP to update.")
-
 if __name__ == "__main__":
     characters = load_characters()
     all_xp = {}
@@ -195,9 +164,6 @@ if __name__ == "__main__":
         exit()
 
     if save_if_changed(all_xp):
-        # Update best_daily_xp.json based on scraped data before Discord post
-        update_best_daily_xp(all_xp)
-
         latest_dates = [max(xp.keys()) for xp in all_xp.values() if xp]
         if not latest_dates:
             print(f"{timestamp()} No XP dates found.")
@@ -222,6 +188,18 @@ if __name__ == "__main__":
                 color=0x636e72
             )
             exit()
+
+        # --- NEW: Update best_daily_xp.json ---
+        best_daily_xp = load_best_daily_xp()
+        for name, xp_val, _, _ in daily_xp_ranking:
+            prev_best = best_daily_xp.get(name)
+            if (not prev_best) or (xp_val > prev_best["xp"]):
+                best_daily_xp[name] = {
+                    "xp": xp_val,       # Store as integer, no commas
+                    "date": latest_date
+                }
+        save_best_daily_xp(best_daily_xp)
+        # --- END NEW ---
 
         medals = ["🥇", "🥈", "🥉"]
         fields = []
