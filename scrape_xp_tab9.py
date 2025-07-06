@@ -4,26 +4,36 @@ import os
 from bs4 import BeautifulSoup
 import datetime
 import calendar
+import subprocess
+import time
 
 CHAR_FILE = "characters.txt"
 JSON_PATH = "xp_log.json"
 MONTHLY_XP_PATH = "monthly_xp.json"
-BEST_DAILY_XP_PATH = "best_daily_xp.json"
+
+def timestamp():
+    return time.strftime("[%Y-%m-%d %H:%M:%S]")
 
 def scrape_xp_tab9(char_name):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
-    response = requests.get(url)
+    print(f"{timestamp()} Scraping {char_name} from {url}")
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"{timestamp()} Error fetching data for {char_name}: {e}")
+        return {}
     soup = BeautifulSoup(response.text, "html.parser")
     tabs1_div = soup.find("div", id="tabs1")
     if not tabs1_div:
-        print(f"No tabs1 div found for {char_name} on tab 9.")
+        print(f"{timestamp()} No tabs1 div found for {char_name} on tab 9.")
         return {}
     table = tabs1_div.find("table", class_="newTable")
     if not table:
-        print(f"No XP table found for {char_name} on tab 9.")
+        print(f"{timestamp()} No XP table found for {char_name} on tab 9.")
         return {}
     xp_data = {}
-    for row in table.find_all("tr")[1:]:
+    for row in table.find_all("tr")[1:]:  # skip header
         tds = row.find_all("td")
         if len(tds) < 2:
             continue
@@ -45,17 +55,17 @@ def load_existing():
 def save_if_changed(data):
     old = load_existing()
     if data == old:
-        print("No XP changes.")
+        print(f"{timestamp()} No XP changes.")
         return False
     with open(JSON_PATH, "w") as f:
         json.dump(data, f, indent=2)
-    print("XP data updated.")
+    print(f"{timestamp()} XP data updated.")
     return True
 
 def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, footer=""):
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:
-        print("DISCORD_WEBHOOK_URL environment variable not set. Skipping Discord notification.")
+        print(f"{timestamp()} DISCORD_WEBHOOK_URL environment variable not set. Skipping Discord notification.")
         return
     embed = {
         "title": title,
@@ -70,13 +80,13 @@ def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, foote
         "embeds": [embed]
     }
     try:
-        resp = requests.post(webhook_url, json=payload)
+        resp = requests.post(webhook_url, json=payload, timeout=10)
         if resp.status_code in (200, 204):
-            print("Posted to Discord successfully.")
+            print(f"{timestamp()} Posted to Discord successfully.")
         else:
-            print(f"Failed to post to Discord: {resp.status_code} {resp.text}")
+            print(f"{timestamp()} Failed to post to Discord: {resp.status_code} {resp.text}")
     except Exception as e:
-        print(f"Exception posting to Discord: {e}")
+        print(f"{timestamp()} Exception posting to Discord: {e}")
 
 def xp_str_to_int(xp_str):
     try:
@@ -91,7 +101,7 @@ def load_monthly_xp(characters):
             with open(MONTHLY_XP_PATH, "r") as f:
                 data = json.load(f)
         except Exception as e:
-            print(f"Failed to load {MONTHLY_XP_PATH}, resetting: {e}")
+            print(f"{timestamp()} Failed to load {MONTHLY_XP_PATH}, resetting: {e}")
             data = {}
     if not isinstance(data, dict):
         data = {}
@@ -108,20 +118,6 @@ def save_monthly_xp(data):
     with open(MONTHLY_XP_PATH, "w") as f:
         json.dump(data, f, indent=2)
 
-def load_best_daily():
-    if os.path.exists(BEST_DAILY_XP_PATH):
-        try:
-            with open(BEST_DAILY_XP_PATH, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Failed to load best_daily_xp.json: {e}")
-    return {}
-
-def save_best_daily(data):
-    with open(BEST_DAILY_XP_PATH, "w") as f:
-        json.dump(data, f, indent=2)
-    print(f"[DEBUG] best_daily_xp.json updated at {os.path.abspath(BEST_DAILY_XP_PATH)}")
-
 def get_current_month():
     return datetime.datetime.now().strftime("%Y-%m")
 
@@ -132,22 +128,31 @@ def get_ordinal(n):
         suffix = {1:'st',2:'nd',3:'rd'}.get(n%10, 'th')
     return f"{n}{suffix}"
 
+def run_git_command(args, timeout=30):
+    try:
+        print(f"{timestamp()} Running git command: {' '.join(['git'] + args)}")
+        subprocess.run(["git"] + args, check=True, timeout=timeout)
+        print(f"{timestamp()} Git command succeeded: {' '.join(args)}")
+    except subprocess.CalledProcessError as e:
+        print(f"{timestamp()} Git command failed: {' '.join(args)}; {e}")
+    except subprocess.TimeoutExpired:
+        print(f"{timestamp()} Git command timed out: {' '.join(args)}")
+
 if __name__ == "__main__":
     characters = load_characters()
     all_xp = {}
 
     for name in characters:
-        print(f"Scraping {name}...")
         all_xp[name] = scrape_xp_tab9(name)
 
     if not all_xp:
-        print("No data scraped for any characters.")
+        print(f"{timestamp()} No data scraped for any characters.")
         exit()
 
     if save_if_changed(all_xp):
         latest_dates = [max(xp.keys()) for xp in all_xp.values() if xp]
         if not latest_dates:
-            print("No XP dates found.")
+            print(f"{timestamp()} No XP dates found.")
             exit()
         latest_date = max(latest_dates)
         daily_xp_ranking = []
@@ -162,7 +167,7 @@ if __name__ == "__main__":
             daily_xp_ranking.append((name, xp_val, line_arrow, xp_raw))
         daily_xp_ranking.sort(key=lambda x: x[1], reverse=True)
         if not daily_xp_ranking:
-            print("No XP increases today.")
+            print(f"{timestamp()} No XP increases today.")
             post_to_discord_embed(
                 "Tibia Daily XP Leaderboard",
                 f"📉 No XP increases for any tracked characters on {latest_date}.",
@@ -198,27 +203,11 @@ if __name__ == "__main__":
             footer=""
         )
 
-        # --- 🔥 Best Daily XP Logic ---
-        best_daily_xp = load_best_daily()
-        new_records = []
-        for name, xp_val, _, _ in daily_xp_ranking:
-            prev_best = best_daily_xp.get(name, 0)
-            print(f"[DEBUG] Checking {name}: {xp_val} vs {prev_best}")
-            if xp_val > prev_best:
-                print(f"[DEBUG] New personal best for {name}: {xp_val}")
-                best_daily_xp[name] = xp_val
-                new_records.append((name, xp_val, prev_best))
-
-        if new_records:
-            save_best_daily(best_daily_xp)
-        else:
-            print(f"[DEBUG] No new personal bests.")
-
         # --- Monthly leaderboard logic ---
         monthly_xp = load_monthly_xp(characters)
         current_month = get_current_month()
         if monthly_xp["month"] != current_month:
-            print(f"New month detected ({current_month}), resetting monthly totals.")
+            print(f"{timestamp()} New month detected ({current_month}), resetting monthly totals.")
             monthly_xp = {"month": current_month, "totals": {name: 0 for name in characters}}
         for name, xp_dict in all_xp.items():
             xp_raw = xp_dict.get(latest_date, None)
@@ -246,7 +235,7 @@ if __name__ == "__main__":
                     "inline": False
                 })
             monthly_top = f"**{monthly_ranking[0][0]}**" if monthly_ranking else ""
-            monthly_title = "🟡🟢🔵 Total Monthly XP Table 🔵🟢🟡"
+            monthly_title = "🟡🟢🔵 Total Monthly XP Table 🔵🟢🟡 "
             monthly_description = (
                 f"👑 **Top Gainer:** {monthly_top} 👑\n"
                 f"📅 **Month:** {current_month}"
@@ -259,11 +248,13 @@ if __name__ == "__main__":
                 footer=""
             )
 
-        # --- Git commit & push ---
-        os.system("git config user.name github-actions")
-        os.system("git config user.email github-actions@github.com")
-        os.system("git add xp_log.json monthly_xp.json best_daily_xp.json")
+        # Commit & push changes to GitHub
+        run_git_command(["config", "user.name", "github-actions"])
+        run_git_command(["config", "user.email", "github-actions@github.com"])
+        run_git_command(["add", "xp_log.json", "monthly_xp.json"])
         commit_message = f"Daily XP update {latest_date}"
-        os.system(f'git commit -m "{commit_message}" || echo "No changes to commit"')
-        os.system("git pull --rebase || echo 'Nothing to rebase'")
-        os.system("git push || echo 'Push failed (possibly due to no new commit or branch protection)'")
+        run_git_command(["commit", "-m", commit_message])
+        run_git_command(["pull", "--rebase"])
+        run_git_command(["push"])
+    else:
+        print(f"{timestamp()} No changes detected; skipping Discord post and Git push.")
