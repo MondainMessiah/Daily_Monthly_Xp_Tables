@@ -9,6 +9,7 @@ import time
 
 CHAR_FILE = "characters.txt"
 JSON_PATH = "xp_log.json"
+BEST_DAILY_PATH = "best_daily_xp.json"
 MONTHLY_XP_PATH = "monthly_xp.json"
 
 def timestamp():
@@ -138,6 +139,50 @@ def run_git_command(args, timeout=30):
     except subprocess.TimeoutExpired:
         print(f"{timestamp()} Git command timed out: {' '.join(args)}")
 
+def load_json(path):
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+def update_best_daily_xp(all_xp):
+    best_daily = load_json(BEST_DAILY_PATH)
+
+    # Find the latest date across all characters in current scrape
+    all_dates = []
+    for xp_data in all_xp.values():
+        all_dates.extend(xp_data.keys())
+    if not all_dates:
+        print(f"{timestamp()} No dates found in scraped data to update best daily XP.")
+        return
+    latest_date = max(all_dates)
+
+    updated = False
+    for char, xp_data in all_xp.items():
+        xp_str = xp_data.get(latest_date)
+        if not xp_str or "+" not in xp_str:
+            continue
+        xp_val = xp_str_to_int(xp_str)
+        if xp_val <= 0:
+            continue
+
+        record = best_daily.get(char, {})
+        best_xp_val = record.get("xp", 0)
+        if xp_val > best_xp_val:
+            best_daily[char] = {"date": latest_date, "xp": xp_val}
+            print(f"{timestamp()} New best daily XP for {char}: {xp_val} on {latest_date}")
+            updated = True
+
+    if updated:
+        save_json(BEST_DAILY_PATH, best_daily)
+        print(f"{timestamp()} best_daily_xp.json updated.")
+    else:
+        print(f"{timestamp()} No new best daily XP to update.")
+
 if __name__ == "__main__":
     characters = load_characters()
     all_xp = {}
@@ -150,6 +195,9 @@ if __name__ == "__main__":
         exit()
 
     if save_if_changed(all_xp):
+        # Update best_daily_xp.json based on scraped data before Discord post
+        update_best_daily_xp(all_xp)
+
         latest_dates = [max(xp.keys()) for xp in all_xp.values() if xp]
         if not latest_dates:
             print(f"{timestamp()} No XP dates found.")
@@ -251,7 +299,7 @@ if __name__ == "__main__":
         # Commit & push changes to GitHub
         run_git_command(["config", "user.name", "github-actions"])
         run_git_command(["config", "user.email", "github-actions@github.com"])
-        run_git_command(["add", "xp_log.json", "monthly_xp.json"])
+        run_git_command(["add", "xp_log.json", "monthly_xp.json", "best_daily_xp.json"])
         commit_message = f"Daily XP update {latest_date}"
         run_git_command(["commit", "-m", commit_message])
         run_git_command(["pull", "--rebase"])
