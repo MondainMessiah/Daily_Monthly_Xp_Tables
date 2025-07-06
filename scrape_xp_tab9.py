@@ -108,6 +108,20 @@ def save_monthly_xp(data):
     with open(MONTHLY_XP_PATH, "w") as f:
         json.dump(data, f, indent=2)
 
+def load_best_daily():
+    if os.path.exists(BEST_DAILY_XP_PATH):
+        try:
+            with open(BEST_DAILY_XP_PATH, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Failed to load best_daily_xp.json: {e}")
+    return {}
+
+def save_best_daily(data):
+    with open(BEST_DAILY_XP_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"[DEBUG] best_daily_xp.json updated at {os.path.abspath(BEST_DAILY_XP_PATH)}")
+
 def get_current_month():
     return datetime.datetime.now().strftime("%Y-%m")
 
@@ -117,16 +131,6 @@ def get_ordinal(n):
     else:
         suffix = {1:'st',2:'nd',3:'rd'}.get(n%10, 'th')
     return f"{n}{suffix}"
-
-def load_best_daily():
-    if os.path.exists(BEST_DAILY_XP_PATH):
-        with open(BEST_DAILY_XP_PATH, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_best_daily(data):
-    with open(BEST_DAILY_XP_PATH, "w") as f:
-        json.dump(data, f, indent=2)
 
 if __name__ == "__main__":
     characters = load_characters()
@@ -166,33 +170,6 @@ if __name__ == "__main__":
             )
             exit()
 
-        # --- New Personal Bests ---
-        best_daily_xp = load_best_daily()
-        new_records = []
-        for name, xp_val, _, _ in daily_xp_ranking:
-            prev_best = best_daily_xp.get(name, 0)
-            if xp_val > prev_best:
-                print(f"🎉 New personal best for {name}: {xp_val} XP (was {prev_best})")
-                best_daily_xp[name] = xp_val
-                new_records.append((name, xp_val, prev_best))
-        if new_records:
-            save_best_daily(best_daily_xp)
-            record_fields = []
-            for name, new_val, old_val in new_records:
-                delta = new_val - old_val
-                record_fields.append({
-                    "name": f"🏅 New Record for **{name}**",
-                    "value": f"+{new_val:,} XP (↑ {delta:,})",
-                    "inline": False
-                })
-            post_to_discord_embed(
-                title="📈 New Personal Best XP Gains!",
-                description=f"🔥 These players just set new records on {latest_date}!",
-                fields=record_fields,
-                color=0x27ae60
-            )
-
-        # --- Daily Leaderboard ---
         medals = ["🥇", "🥈", "🥉"]
         fields = []
         for idx, (name, xp_val, arrow, xp_raw) in enumerate(daily_xp_ranking):
@@ -207,14 +184,37 @@ if __name__ == "__main__":
             })
 
         top_gainer = f"**{daily_xp_ranking[0][0]}**" if daily_xp_ranking else "N/A"
+
+        title = "🟡🟢🔵 Tibia Daily XP Leaderboard 🔵🟢🟡"
+        description = (
+            f"👑 **Top Gainer:** {top_gainer} 👑\n"
+            f"📅 **Date:** {latest_date}"
+        )
         post_to_discord_embed(
-            title="🟡🟢🔵 Tibia Daily XP Leaderboard 🔵🟢🟡",
-            description=f"👑 **Top Gainer:** {top_gainer} 👑\n📅 **Date:** {latest_date}",
+            title=title,
+            description=description,
             fields=fields,
-            color=0xf1c40f
+            color=0xf1c40f,
+            footer=""
         )
 
-        # --- Monthly Leaderboard ---
+        # --- 🔥 Best Daily XP Logic ---
+        best_daily_xp = load_best_daily()
+        new_records = []
+        for name, xp_val, _, _ in daily_xp_ranking:
+            prev_best = best_daily_xp.get(name, 0)
+            print(f"[DEBUG] Checking {name}: {xp_val} vs {prev_best}")
+            if xp_val > prev_best:
+                print(f"[DEBUG] New personal best for {name}: {xp_val}")
+                best_daily_xp[name] = xp_val
+                new_records.append((name, xp_val, prev_best))
+
+        if new_records:
+            save_best_daily(best_daily_xp)
+        else:
+            print(f"[DEBUG] No new personal bests.")
+
+        # --- Monthly leaderboard logic ---
         monthly_xp = load_monthly_xp(characters)
         current_month = get_current_month()
         if monthly_xp["month"] != current_month:
@@ -246,17 +246,24 @@ if __name__ == "__main__":
                     "inline": False
                 })
             monthly_top = f"**{monthly_ranking[0][0]}**" if monthly_ranking else ""
+            monthly_title = "🟡🟢🔵 Total Monthly XP Table 🔵🟢🟡"
+            monthly_description = (
+                f"👑 **Top Gainer:** {monthly_top} 👑\n"
+                f"📅 **Month:** {current_month}"
+            )
             post_to_discord_embed(
-                title="🟡🟢🔵 Total Monthly XP Table 🔵🟢🟡 ",
-                description=f"👑 **Top Gainer:** {monthly_top} 👑\n📅 **Month:** {current_month}",
+                title=monthly_title,
+                description=monthly_description,
                 fields=monthly_fields,
-                color=0x2980b9
+                color=0x2980b9,
+                footer=""
             )
 
-        # Git commit & push
+        # --- Git commit & push ---
         os.system("git config user.name github-actions")
         os.system("git config user.email github-actions@github.com")
         os.system("git add xp_log.json monthly_xp.json best_daily_xp.json")
-        os.system(f'git commit -m "Daily XP update {latest_date}" || echo "No changes to commit"')
+        commit_message = f"Daily XP update {latest_date}"
+        os.system(f'git commit -m "{commit_message}" || echo "No changes to commit"')
         os.system("git pull --rebase || echo 'Nothing to rebase'")
         os.system("git push || echo 'Push failed (possibly due to no new commit or branch protection)'")
