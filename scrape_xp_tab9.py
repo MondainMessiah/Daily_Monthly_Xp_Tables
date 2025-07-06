@@ -19,7 +19,7 @@ def scrape_xp_tab9(char_name):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     print(f"{timestamp()} Scraping {char_name} from {url}")
     try:
-        response = requests.get(url, timeout=15)
+        response = requests.get(url, timeout=5)
         response.raise_for_status()
     except Exception as e:
         print(f"{timestamp()} Error fetching data for {char_name}: {e}")
@@ -88,7 +88,7 @@ def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, foote
         embed["fields"] = fields
     payload = {"embeds": [embed]}
     try:
-        resp = requests.post(webhook_url, json=payload, timeout=10)
+        resp = requests.post(webhook_url, json=payload, timeout=5)
         if resp.status_code in (200, 204):
             print(f"{timestamp()} Posted to Discord.")
         else:
@@ -147,7 +147,7 @@ if __name__ == "__main__":
         color=0xf1c40f
     )
 
-    # ---- New best_daily_xp.json logic ----
+    # ---- Updated best_daily_xp.json logic ----
     best_daily = load_json(BEST_DAILY_XP_PATH, {})
     updated = False
 
@@ -158,6 +158,14 @@ if __name__ == "__main__":
             print(f"{timestamp()} New best for {name}: {xp_val:,} XP on {latest_date} (prev: {prev_val:,})")
             best_daily[name] = {"xp": xp_val, "date": latest_date}
             updated = True
+
+            # ✅ Post new personal best to Discord
+            post_to_discord_embed(
+                title="🏅 New Personal Best!",
+                description=f"**{name}** just achieved a new XP record: **+{xp_val:,} XP** on {latest_date}! 🚀",
+                color=0x2ecc71,
+                footer="Tibia XP Tracker"
+            )
         else:
             print(f"{timestamp()} No new best for {name} ({xp_val:,} XP <= {prev_val:,})")
 
