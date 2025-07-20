@@ -1,15 +1,13 @@
-import requests
-import json
 import os
-from bs4 import BeautifulSoup
-import datetime
-import calendar
-import subprocess
+import json
 import time
+import datetime
+from requests_html import HTMLSession
+from bs4 import BeautifulSoup
+import subprocess
 
 CHAR_FILE = "characters.txt"
 JSON_PATH = "xp_log.json"
-MONTHLY_XP_PATH = "monthly_xp.json"
 BEST_DAILY_XP_PATH = "best_daily_xp.json"
 
 def timestamp():
@@ -18,13 +16,19 @@ def timestamp():
 def scrape_xp_tab9(char_name):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     print(f"{timestamp()} Scraping {char_name} from {url}")
+    session = HTMLSession()
     try:
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
+        response = session.get(url)
+        # Try to render JavaScript (optional, depending on the site)
+        try:
+            response.html.render(timeout=20, sleep=2)
+        except Exception as render_exc:
+            print(f"{timestamp()} JS rendering failed (may not be needed): {render_exc}")
+
+        soup = BeautifulSoup(response.html.html, "html.parser")
     except Exception as e:
         print(f"{timestamp()} Error fetching data for {char_name}: {e}")
         return {}
-    soup = BeautifulSoup(response.text, "html.parser")
     tabs1_div = soup.find("div", id="tabs1")
     if not tabs1_div:
         print(f"{timestamp()} No tabs1 div found for {char_name} on tab 9.")
@@ -62,9 +66,6 @@ def xp_str_to_int(xp_str):
     except Exception:
         return 0
 
-def get_current_month():
-    return datetime.datetime.now().strftime("%Y-%m")
-
 def get_ordinal(n):
     if 10 <= n % 100 <= 20:
         suffix = 'th'
@@ -88,6 +89,7 @@ def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, foote
         embed["fields"] = fields
     payload = {"embeds": [embed]}
     try:
+        import requests
         resp = requests.post(webhook_url, json=payload, timeout=5)
         if resp.status_code in (200, 204):
             print(f"{timestamp()} Posted to Discord.")
@@ -104,9 +106,19 @@ def run_git_command(args, timeout=30):
         print(f"{timestamp()} Git error: {e}")
 
 if __name__ == "__main__":
-    characters = load_json(CHAR_FILE, fallback=[] if not os.path.exists(CHAR_FILE) else open(CHAR_FILE).read().splitlines())
+    # Load characters list
+    if os.path.exists(CHAR_FILE):
+        try:
+            with open(CHAR_FILE) as f:
+                characters = [line.strip() for line in f if line.strip()]
+        except Exception as e:
+            print(f"{timestamp()} Failed to load {CHAR_FILE}: {e}")
+            characters = []
+    else:
+        characters = []
+
     all_xp = {name: scrape_xp_tab9(name) for name in characters}
-    save_json("xp_log.json", all_xp)
+    save_json(JSON_PATH, all_xp)
 
     latest_dates = [max(xp.keys()) for xp in all_xp.values() if xp]
     if not latest_dates:
