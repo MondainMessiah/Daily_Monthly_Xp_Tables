@@ -2,7 +2,7 @@ name: Daily XP Leaderboard
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Runs at 06:00 UTC every day
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -22,7 +22,7 @@ jobs:
             libnss3 libatk-bridge2.0-0 libxkbcommon0 libgtk-3-0 libgbm1 \
             libasound2t64 libxcomposite1 libxdamage1 libxrandr2 libxss1 \
             libxcursor1 libxi6 libxtst6 libatspi2.0-0 libdrm2 libxinerama1 \
-            libwoff1 libwoff2 libvpx-dev libopus0 libevent-2.1-7 \
+            libwoff1 libwoff2-1-0 libvpx-dev libopus0 libevent-2.1-7 \
             gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good gstreamer1.0-pulseaudio \
             gstreamer1.0-x gir1.2-secret-1 libsecret-1-0 \
