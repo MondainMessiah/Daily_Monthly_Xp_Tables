@@ -2,27 +2,28 @@ name: Daily XP Leaderboard
 
 on:
   schedule:
-    - cron: '0 6 * * *'
-  workflow_dispatch:
+    - cron: '0 6 * * *' # Runs at 06:00 UTC daily (07:00 BST in summer)
+  workflow_dispatch: # Allows manual triggering from GitHub UI
 
 jobs:
   run-leaderboard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    runs-on: ubuntu-latest # Uses the latest Ubuntu version (currently Ubuntu 24.04 Noble Numbat)
 
-      - uses: actions/setup-python@v5
+    steps:
+      - uses: actions/checkout@v4 # Checks out your repository code
+
+      - uses: actions/setup-python@v5 # Sets up Python
         with:
-          python-version: '3.10'
+          python-version: '3.10' # Ensure this matches your project's requirement
 
       - name: Install Playwright system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libnss3 libatk-bridge2.0-0 libxkbcommon0 libgtk-3-0 libgbm1 \
-            libasound2t64 libxcomposite1 libxdamage1 libxrandr2 libxss1 \
+            libasound2 libxcomposite1 libxdamage1 libxrandr2 libxss1 \
             libxcursor1 libxi6 libxtst6 libatspi2.0-0 libdrm2 libxinerama1 \
-            libwoff1 libwoff2 libvpx-dev libopus0 libevent-2.1-7 \
+            libwoff1 libvpx-dev libopus0 libevent-2.1-7 \
             gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good gstreamer1.0-pulseaudio \
             gstreamer1.0-x gir1.2-secret-1 libsecret-1-0 \
@@ -39,16 +40,22 @@ jobs:
 
       - name: Run XP Leaderboard Script
         env:
+          # Make sure DISCORD_WEBHOOK_URL is set as a repository secret in GitHub Settings -> Secrets and variables -> Actions
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python scrape_xp_tab9.py
 
       - name: Commit & Push Results
         env:
+          # GITHUB_TOKEN is a default secret provided by GitHub Actions for write access to your repo
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
+          # Stage the JSON files for commit
           git add xp_log.json monthly_xp.json best_daily_xp.json
+          # Commit only if there are changes (prevents empty commits)
           git diff --cached --quiet || git commit -m "Automated daily XP update"
+          # Pull latest changes before pushing to avoid conflicts
           git pull --rebase --autostash
+          # Push the changes
           git push
