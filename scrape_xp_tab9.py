@@ -1,34 +1,28 @@
 import os
 import json
-import time
-import datetime
-from requests_html import HTMLSession
+import asyncio
+from datetime import datetime
 from bs4 import BeautifulSoup
-import subprocess
+from playwright.async_api import async_playwright
 
 CHAR_FILE = "characters.txt"
 JSON_PATH = "xp_log.json"
 BEST_DAILY_XP_PATH = "best_daily_xp.json"
 
 def timestamp():
-    return time.strftime("[%Y-%m-%d %H:%M:%S]")
+    return datetime.utcnow().strftime("[%Y-%m-%d %H:%M:%S]")
 
-def scrape_xp_tab9(char_name):
+async def scrape_xp_tab9(char_name, page):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     print(f"{timestamp()} Scraping {char_name} from {url}")
-    session = HTMLSession()
+    await page.goto(url)
     try:
-        response = session.get(url)
-        # Try to render JavaScript (optional, depending on the site)
-        try:
-            response.html.render(timeout=20, sleep=2)
-        except Exception as render_exc:
-            print(f"{timestamp()} JS rendering failed (may not be needed): {render_exc}")
-
-        soup = BeautifulSoup(response.html.html, "html.parser")
-    except Exception as e:
-        print(f"{timestamp()} Error fetching data for {char_name}: {e}")
+        await page.wait_for_selector("#tabs1", timeout=10000)
+    except Exception:
+        print(f"{timestamp()} No tabs1 div found for {char_name} on tab 9.")
         return {}
+    content = await page.content()
+    soup = BeautifulSoup(content, "html.parser")
     tabs1_div = soup.find("div", id="tabs1")
     if not tabs1_div:
         print(f"{timestamp()} No tabs1 div found for {char_name} on tab 9.")
@@ -98,14 +92,7 @@ def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, foote
     except Exception as e:
         print(f"{timestamp()} Exception posting to Discord: {e}")
 
-def run_git_command(args, timeout=30):
-    try:
-        print(f"{timestamp()} Running git: {' '.join(args)}")
-        subprocess.run(["git"] + args, check=True, timeout=timeout)
-    except Exception as e:
-        print(f"{timestamp()} Git error: {e}")
-
-if __name__ == "__main__":
+async def main():
     # Load characters list
     if os.path.exists(CHAR_FILE):
         try:
@@ -117,13 +104,21 @@ if __name__ == "__main__":
     else:
         characters = []
 
-    all_xp = {name: scrape_xp_tab9(name) for name in characters}
+    all_xp = {}
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        for name in characters:
+            xp_data = await scrape_xp_tab9(name, page)
+            all_xp[name] = xp_data
+        await browser.close()
+
     save_json(JSON_PATH, all_xp)
 
     latest_dates = [max(xp.keys()) for xp in all_xp.values() if xp]
     if not latest_dates:
         print(f"{timestamp()} No valid XP data.")
-        exit()
+        return
 
     latest_date = max(latest_dates)
     daily_ranking = []
@@ -140,7 +135,7 @@ if __name__ == "__main__":
 
     if not daily_ranking:
         post_to_discord_embed("Tibia Daily XP Leaderboard", f"No XP gains on {latest_date}.", color=0x636e72)
-        exit()
+        return
 
     medals = ["🥇", "🥈", "🥉"]
     fields = []
@@ -186,3 +181,6 @@ if __name__ == "__main__":
         save_json(BEST_DAILY_XP_PATH, best_daily)
     else:
         print(f"{timestamp()} No changes to best_daily_xp.json")
+
+if __name__ == "__main__":
+    asyncio.run(main())
