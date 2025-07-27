@@ -186,7 +186,7 @@ async def main():
 
         post_to_discord_embed(
             "🟡🟢🔵 Tibia Daily XP Leaderboard 🔵🟢🟡",
-            f"👑 **Top Gainer:** **{daily_ranking[0][0]}** 👑\n📅 **Date:** {latest_date}",
+            f"👑 **Top Gainer:** **{daily_ranking[0][0]}** 👑\n🗓️ **Date:** {latest_date}",
             fields=fields,
             color=0xf1c40f
         )
