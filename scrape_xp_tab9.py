@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo # <-- ADDED THIS IMPORT
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import requests
@@ -15,7 +16,7 @@ BEST_DAILY_XP_PATH = "best_daily_xp.json"
 
 def timestamp():
     """Returns a formatted timestamp string for logging."""
-    return datetime.utcnow().strftime("[%Y-%m-%d %H:%M:%S]")
+    return datetime.now(ZoneInfo("Europe/London")).strftime("[%Y-%m-%d %H:%M:%S]")
 
 def xp_str_to_int(xp_str):
     """Converts a formatted XP string (e.g., '+1,234,567') to an integer."""
@@ -154,7 +155,9 @@ def run_daily_report(all_xp):
 def run_monthly_report(all_xp):
     """On the 1st of the month, calculates and posts the PREVIOUS month's total XP leaderboard."""
     print(f"{timestamp()} --- Checking for Monthly Report ---")
-    today = datetime.utcnow()
+    
+    # Use your local timezone to check the date
+    today = datetime.now(ZoneInfo("Europe/London")) # <-- MODIFIED THIS LINE
 
     # This report should only run on the first day of the month.
     if today.day != 1:
