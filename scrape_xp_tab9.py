@@ -157,7 +157,7 @@ def run_monthly_report(all_xp):
     today = datetime.utcnow()
 
     # This report should only run on the first day of the month.
-  #  if today.day != 1:
+    if today.day != 1:
         print(f"{timestamp()} Not the 1st of the month ({get_ordinal(today.day)}). Skipping monthly report.")
         return
 
