@@ -2,7 +2,7 @@ name: Daily XP Leaderboard
 
 on:
   schedule:
-    - cron: '0 7 * * *' # Runs at 06:00 UTC daily (07:00 BST in summer)
+    - cron: '0 10 * * *' # Runs at 06:00 UTC daily (07:00 BST in summer)
   workflow_dispatch: # Allows manual triggering from GitHub UI
 
 jobs:
