@@ -43,6 +43,7 @@ def check_pb(category, name, current_xp):
     return ""
 
 def update_streak(category, winner_name):
+    """Fires for streaks 2-9. Crown only for 10+."""
     all_streaks = load_json(STREAKS_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
     cat_data = all_streaks.get(category, {"last_winner": "", "count": 0})
     
@@ -55,10 +56,10 @@ def update_streak(category, winner_name):
     all_streaks[category] = cat_data
     save_json(STREAKS_PATH, all_streaks)
     
-    if cat_data["count"] > 1:
-        num_fires = min(cat_data["count"], 5)
-        fires = "🔥" * num_fires
-        return f"({fires})"
+    if cat_data["count"] >= 10:
+        return "👑"
+    elif cat_data["count"] > 1:
+        return "🔥" * cat_data["count"]
     return ""
 
 def calculate_growth(category, current_total):
@@ -69,8 +70,7 @@ def calculate_growth(category, current_total):
     history[category] = current_total
     save_json(TOTALS_HISTORY_PATH, history)
     
-    # Legend on separate lines using \n
-    legend = "\n🔥=Win Streak\n⭐=New PB"
+    legend = "\n⭐=New PB\n🔥=Win Streak\n👑=10+ Streak"
     if prev_total == 0: 
         return f"Team Total: {current_total:,} XP{legend}"
     return f"Team Total: {current_total:,} XP ({prefix}{diff:,} vs prev {category}){legend}"
@@ -87,7 +87,7 @@ def create_fields(ranking, category, streak_text=""):
         bar = "🟩" * num_green + "⬛" * (10 - num_green)
         pb_badge = check_pb(category, name, xp_val)
         
-        display_name = f"{name}{streak_text}{pb_badge}" if i == 0 else f"{name}{pb_badge}"
+        display_name = f"{name}{pb_badge}{streak_text}" if i == 0 else f"{name}{pb_badge}"
         
         fields.append({
             "name": f"{medals[i]} **{display_name}**",
@@ -134,7 +134,7 @@ async def main():
     
     save_json(JSON_PATH, all_xp)
     
-    # Run Daily
+    # --- Daily ---
     dates = [max(xp.keys()) for xp in all_xp.values() if xp]
     if dates:
         latest = max(dates)
@@ -143,7 +143,7 @@ async def main():
             streak = update_streak("daily", rank_d[0][0])
             post_to_discord_embed("🏆 Daily Champion 🏆", f"🗓️ Date: {latest}", create_fields(rank_d, "daily", streak), 0xf1c40f, calculate_growth("daily", sum(r[1] for r in rank_d)))
 
-    # Run Weekly
+    # --- Weekly ---
     today = datetime.now(ZoneInfo(TIMEZONE))
     if today.weekday() == 0:
         s, e = (today - timedelta(days=7)).strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -153,7 +153,7 @@ async def main():
             streak = update_streak("weekly", rank_w[0][0])
             post_to_discord_embed("🏆 Weekly Champion 🏆", f"🗓️ {s} to {e}", create_fields(rank_w, "weekly", streak), 0x2ecc71, calculate_growth("weekly", sum(r[1] for r in rank_w)))
 
-    # Run Monthly
+    # --- Monthly ---
     if today.day == 1:
         prev_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
         rank_m = sorted([(n, sum(int(v.replace(",", "").replace("+", "")) for d, v in xp.items() if d.startswith(prev_month) and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
