@@ -2,8 +2,13 @@ name: Run XP Scraper
 
 on:
   schedule:
-    - cron: '0 10 * * *' # Runs daily at midnight
-  workflow_dispatch: # Allows you to run it manually
+    - cron: '0 10 * * *' # 10:00 AM UTC
+  workflow_dispatch: 
+
+# --- ADD THIS SECTION ---
+permissions:
+  contents: write
+# ------------------------
 
 jobs:
   build:
@@ -11,11 +16,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: os-actions/setup-python@v4
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
@@ -29,11 +32,10 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python scrape_xp_tab9.py
 
-      # --- THIS IS THE MISSING PART ---
       - name: Commit and Push changes
         run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.email "action@github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add xp_log.json personal_bests.json streaks.json totals_history.json
-          # Only commit if there are actually changes to avoid errors
+          # This line prevents the error if no one gained XP today
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update XP logs and PBs" && git push)
