@@ -9,16 +9,13 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import requests
 
-# --- DYNAMIC PATHING (The Fix) ---
-# This forces Python to look at the script's folder, not the "Home" folder
+# --- DYNAMIC PATHING ---
 BASE_DIR = Path(__file__).resolve().parent
-
 CHAR_FILE = BASE_DIR / "characters.txt"
 JSON_PATH = BASE_DIR / "xp_log.json"
 PB_PATH = BASE_DIR / "personal_bests.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
 TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
-
 TIMEZONE = "Europe/London"
 
 # --- HELPER FUNCTIONS ---
@@ -35,39 +32,34 @@ def load_json(path, fallback):
 def save_json(path, data):
     with open(path, "w") as f: json.dump(data, f, indent=2)
 
-def ensure_files_exist():
-    """Forces creation of JSON files so you can verify they exist."""
-    files = [JSON_PATH, PB_PATH, STREAKS_PATH, TOTALS_HISTORY_PATH]
-    for f in files:
-        if not f.exists():
-            with open(f, 'w') as fh:
-                json.dump({}, fh)
-            print(f"✅ Created missing file: {f.name}")
-
 def check_pb(category, name, current_xp):
     pbs = load_json(PB_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
-    cat_pbs = pbs.get(category, {})
+    cat_pbs = pbs.setdefault(category, {})
     record = cat_pbs.get(name, 0)
-    
     if current_xp > record:
         cat_pbs[name] = current_xp
-        pbs[category] = cat_pbs
         save_json(PB_PATH, pbs)
-        if record > 0:
-            return " ⭐ **New PB!**"
+        if record > 0: return "⭐"
     return ""
 
 def update_streak(category, winner_name):
-    all_streaks = load_json(STREAKS_PATH, {})
+    all_streaks = load_json(STREAKS_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
     cat_data = all_streaks.get(category, {"last_winner": "", "count": 0})
+    
     if cat_data["last_winner"] == winner_name:
         cat_data["count"] += 1
     else:
         cat_data["last_winner"] = winner_name
         cat_data["count"] = 1
+    
     all_streaks[category] = cat_data
     save_json(STREAKS_PATH, all_streaks)
-    return cat_data["count"]
+    
+    if cat_data["count"] > 1:
+        num_fires = min(cat_data["count"], 5)
+        fires = "🔥" * num_fires
+        return f"({fires})"
+    return ""
 
 def calculate_growth(category, current_total):
     history = load_json(TOTALS_HISTORY_PATH, {})
@@ -76,9 +68,12 @@ def calculate_growth(category, current_total):
     prefix = "+" if diff >= 0 else ""
     history[category] = current_total
     save_json(TOTALS_HISTORY_PATH, history)
-    if prev_total == 0:
-        return f"Team Total: {current_total:,} XP"
-    return f"Team Total: {current_total:,} XP ({prefix}{diff:,} vs prev {category})"
+    
+    # Legend on separate lines using \n
+    legend = "\n🔥=Win Streak\n⭐=New PB"
+    if prev_total == 0: 
+        return f"Team Total: {current_total:,} XP{legend}"
+    return f"Team Total: {current_total:,} XP ({prefix}{diff:,} vs prev {category}){legend}"
 
 def create_fields(ranking, category, streak_text=""):
     fields = []
@@ -91,13 +86,18 @@ def create_fields(ranking, category, streak_text=""):
         num_green = round(percent * 10)
         bar = "🟩" * num_green + "⬛" * (10 - num_green)
         pb_badge = check_pb(category, name, xp_val)
+        
         display_name = f"{name}{streak_text}{pb_badge}" if i == 0 else f"{name}{pb_badge}"
-        fields.append({"name": f"{medals[i]} **{display_name}**", "value": f"+{xp_val:,} XP\n{bar} `{int(percent*100)}%`", "inline": False})
-
+        
+        fields.append({
+            "name": f"{medals[i]} **{display_name}**",
+            "value": f"+{xp_val:,} XP\n{bar} `{int(percent*100)}%`",
+            "inline": False
+        })
+    
     if len(ranking) > 3:
-        others = [f"`{idx}.` **{n}** (+{v:,} XP){check_pb(category, n, v)}" for idx, (n, v) in enumerate(ranking[3:], start=4) if v > 0]
-        if others:
-            fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
+        others = [f"`{idx}.` **{n}**(+{v:,} XP){check_pb(category, n, v)}" for idx, (n, v) in enumerate(ranking[3:], start=4) if v > 0]
+        if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
     return fields
 
 def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, footer=""):
@@ -106,11 +106,6 @@ def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, foote
     payload = {"embeds": [{"title": title, "description": description, "fields": fields, "color": color, "footer": {"text": footer}}]}
     try: requests.post(url, json=payload, timeout=10)
     except: pass
-
-# --- SCRAPING ---
-def xp_str_to_int(xp_str):
-    try: return int(xp_str.replace(",", "").replace("+", "").strip())
-    except: return 0
 
 async def scrape_xp_tab9(char_name, page):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
@@ -122,50 +117,11 @@ async def scrape_xp_tab9(char_name, page):
         return {tds[0].get_text(strip=True): tds[1].get_text(strip=True) for row in table.find_all("tr")[1:] if len((tds := row.find_all("td"))) >= 2}
     except: return {}
 
-# --- REPORTS ---
-def run_daily_report(all_xp):
-    dates = [max(xp.keys()) for xp in all_xp.values() if xp]
-    if not dates: return
-    latest = max(dates)
-    ranking = sorted([(n, xp_str_to_int(xp.get(latest))) for n, xp in all_xp.items() if xp.get(latest) and "+" in xp.get(latest)], key=lambda x: x[1], reverse=True)
-    if not ranking: return
-    footer_text = calculate_growth("daily", sum(r[1] for r in ranking))
-    count = update_streak("daily", ranking[0][0])
-    post_to_discord_embed("🏆 Daily Champion 🏆", f"🗓️ **Date:** {latest}", create_fields(ranking, "daily", f" ({count}x 🥇)" if count > 1 else ""), 0xf1c40f, footer_text)
-
-def run_weekly_report(all_xp):
-    today = datetime.now(ZoneInfo(TIMEZONE))
-    if today.weekday() != 0: return 
-    s, e = (today - timedelta(days=7)).strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")
-    ranking = sorted([(n, sum(xp_str_to_int(v) for d, v in xp.items() if s <= d <= e and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
-    ranking = [r for r in ranking if r[1] > 0]
-    if not ranking: return
-    footer_text = calculate_growth("weekly", sum(r[1] for r in ranking))
-    count = update_streak("weekly", ranking[0][0])
-    post_to_discord_embed("🏆 Weekly Champion 🏆", f"🗓️ {s} to {e}", create_fields(ranking, "weekly", f" ({count}x 🥇)" if count > 1 else ""), 0x2ecc71, footer_text)
-
-def run_monthly_report(all_xp):
-    today = datetime.now(ZoneInfo(TIMEZONE))
-    if today.day != 1: return
-    prev_month_date = (today.replace(day=1) - timedelta(days=1))
-    prev_str = prev_month_date.strftime("%Y-%m")
-    ranking = sorted([(n, sum(xp_str_to_int(v) for d, v in xp.items() if d.startswith(prev_str) and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
-    ranking = [r for r in ranking if r[1] > 0]
-    if not ranking: return
-    footer_text = calculate_growth("monthly", sum(r[1] for r in ranking))
-    count = update_streak("monthly", ranking[0][0])
-    post_to_discord_embed("🏆 Monthly Champion 🏆", f"🗓️ {prev_month_date.strftime('%B %Y')}", create_fields(ranking, "monthly", f" ({count}x 🥇)" if count > 1 else ""), 0x3498db, footer_text)
-
 async def main():
     print(f"--- Process Started at {timestamp()} ---")
-    ensure_files_exist()
-
-    if not CHAR_FILE.exists():
-        print(f"❌ Error: {CHAR_FILE.name} not found in {BASE_DIR}")
-        return
+    if not CHAR_FILE.exists(): return
 
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
-    
     all_xp = {}
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -177,9 +133,35 @@ async def main():
         await browser.close()
     
     save_json(JSON_PATH, all_xp)
-    run_daily_report(all_xp)
-    run_weekly_report(all_xp)
-    run_monthly_report(all_xp)
+    
+    # Run Daily
+    dates = [max(xp.keys()) for xp in all_xp.values() if xp]
+    if dates:
+        latest = max(dates)
+        rank_d = sorted([(n, int(xp.get(latest).replace(",", "").replace("+", ""))) for n, xp in all_xp.items() if xp.get(latest) and "+" in xp.get(latest)], key=lambda x: x[1], reverse=True)
+        if rank_d:
+            streak = update_streak("daily", rank_d[0][0])
+            post_to_discord_embed("🏆 Daily Champion 🏆", f"🗓️ Date: {latest}", create_fields(rank_d, "daily", streak), 0xf1c40f, calculate_growth("daily", sum(r[1] for r in rank_d)))
+
+    # Run Weekly
+    today = datetime.now(ZoneInfo(TIMEZONE))
+    if today.weekday() == 0:
+        s, e = (today - timedelta(days=7)).strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")
+        rank_w = sorted([(n, sum(int(v.replace(",", "").replace("+", "")) for d, v in xp.items() if s <= d <= e and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
+        rank_w = [r for r in rank_w if r[1] > 0]
+        if rank_w:
+            streak = update_streak("weekly", rank_w[0][0])
+            post_to_discord_embed("🏆 Weekly Champion 🏆", f"🗓️ {s} to {e}", create_fields(rank_w, "weekly", streak), 0x2ecc71, calculate_growth("weekly", sum(r[1] for r in rank_w)))
+
+    # Run Monthly
+    if today.day == 1:
+        prev_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+        rank_m = sorted([(n, sum(int(v.replace(",", "").replace("+", "")) for d, v in xp.items() if d.startswith(prev_month) and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
+        rank_m = [r for r in rank_m if r[1] > 0]
+        if rank_m:
+            streak = update_streak("monthly", rank_m[0][0])
+            post_to_discord_embed("🏆 Monthly Champion 🏆", f"🗓️ {prev_month}", create_fields(rank_m, "monthly", streak), 0x3498db, calculate_growth("monthly", sum(r[1] for r in rank_m)))
+
     print(f"--- Process Finished at {timestamp()} ---")
 
 if __name__ == "__main__":
