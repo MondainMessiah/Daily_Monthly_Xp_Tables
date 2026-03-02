@@ -139,7 +139,7 @@ def run_daily_report(all_xp):
     count, lbl = update_streak("daily", ranking[0][0])
     streak = f" (🥇x{count} {lbl} in a row)" if count > 1 else ""
     
-    post_to_discord_embed("🟡🟢🔵 Tibia Daily XP Leaderboard 🔵🟢🟡", f"👑 **Top Gainer:** **{ranking[0][0]}**{streak}\n🗓️ **Date:** {latest}", create_fields(ranking), 0xf1c40f, footer_text)
+    post_to_discord_embed("🏆 Tibia Daily XP Champion 🏆", f"👑 **Top Gainer:** **{ranking[0][0]}**{streak}\n🗓️ **Date:** {latest}", create_fields(ranking), 0xf1c40f, footer_text)
 
 def run_weekly_report(all_xp):
     today = datetime.now(ZoneInfo(TIMEZONE))
