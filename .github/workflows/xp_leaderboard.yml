@@ -1,61 +1,39 @@
-name: Daily XP Leaderboard
+name: Run XP Scraper
 
 on:
   schedule:
-    - cron: '0 10 * * *' # Runs at 06:00 UTC daily (07:00 BST in summer)
-  workflow_dispatch: # Allows manual triggering from GitHub UI
+    - cron: '0 10 * * *' # Runs daily at midnight
+  workflow_dispatch: # Allows you to run it manually
 
 jobs:
-  run-leaderboard:
-    runs-on: ubuntu-latest # Uses the latest Ubuntu version (currently Ubuntu 24.04 Noble Numbat)
-
+  build:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4 # Checks out your repository code
-
-      - uses: actions/setup-python@v5 # Sets up Python
+      - name: Checkout code
+        uses: actions/checkout@v3
         with:
-          python-version: '3.10' # Ensure this matches your project's requirement
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Playwright system dependencies
+      - name: Set up Python
+        uses: os-actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libnss3 libatk-bridge2.0-0 libxkbcommon0 libgtk-3-0 libgbm1 \
-            libasound2t64 libxcomposite1 libxdamage1 libxrandr2 libxss1 \
-            libxcursor1 libxi6 libxtst6 libatspi2.0-0 libdrm2 libxinerama1 \
-            libwoff1 libvpx-dev libopus0 libevent-2.1-7 \
-            gstreamer1.0-alsa gstreamer1.0-gl gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good gstreamer1.0-pulseaudio \
-            gstreamer1.0-x gir1.2-secret-1 libsecret-1-0 \
-            libflite1 libavif16 libharfbuzz-icu0 libhyphen0 libmanette-0.2-0 \
-            libgles2 libx264-dev
+          pip install playwright beautifulsoup4 requests
+          playwright install chromium
 
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Install Playwright Browsers
-        run: python -m playwright install
-
-      - name: Run XP Leaderboard Script
+      - name: Run Scraper
         env:
-          # Make sure DISCORD_WEBHOOK_URL is set as a repository secret in GitHub Settings -> Secrets and variables -> Actions
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python scrape_xp_tab9.py
 
-      - name: Commit & Push Results
-        env:
-          # GITHUB_TOKEN is a default secret provided by GitHub Actions for write access to your repo
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # --- THIS IS THE MISSING PART ---
+      - name: Commit and Push changes
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          # Stage the JSON files for commit
-          git add xp_log.json monthly_xp.json best_daily_xp.json
-          # Commit only if there are changes (prevents empty commits)
-          git diff --cached --quiet || git commit -m "Automated daily XP update"
-          # Pull latest changes before pushing to avoid conflicts
-          git pull --rebase --autostash
-          # Push the changes
-          git push
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git add xp_log.json personal_bests.json streaks.json totals_history.json
+          # Only commit if there are actually changes to avoid errors
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update XP logs and PBs" && git push)
