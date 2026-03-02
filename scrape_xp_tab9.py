@@ -13,7 +13,6 @@ JSON_PATH = "xp_log.json"
 BEST_DAILY_XP_PATH = "best_daily_xp.json"
 
 # --- HELPER FUNCTIONS ---
-
 def timestamp():
     """Returns a formatted timestamp string for logging."""
     return datetime.now(ZoneInfo("Europe/London")).strftime("[%Y-%m-%d %H:%M:%S]")
@@ -151,6 +150,55 @@ def run_daily_report(all_xp):
         save_json(BEST_DAILY_XP_PATH, best_daily)
     print(f"{timestamp()} --- Daily Report Finished ---")
 
+def run_weekly_report(all_xp):
+    """Calculates and posts the weekly XP leaderboard."""
+    print(f"{timestamp()} --- Starting Weekly Report ---")
+    
+    # Determine the start and end of the current week
+    today = datetime.now(ZoneInfo("Europe/London"))
+    start_of_week = today - timedelta(days=today.weekday())  # Monday of the week
+    end_of_week = start_of_week + timedelta(days=6)  # Sunday of the week
+    week_range = [start_of_week.strftime("%Y-%m-%d"), end_of_week.strftime("%Y-%m-%d")]
+
+    print(f"{timestamp()} Current week: {week_range[0]} - {week_range[1]}")
+    
+    # Calculate weekly gains
+    weekly_ranking = []
+    for name, xp_data in all_xp.items():
+        weekly_total = sum(
+            xp_str_to_int(xp) 
+            for date, xp in xp_data.items() 
+            if week_range[0] <= date <= week_range[1] and "+" in xp
+        )
+        if weekly_total > 0:
+            weekly_ranking.append((name, weekly_total))
+
+    if not weekly_ranking:
+        print(f"{timestamp()} No XP gains recorded for the week. Posting notice.")
+        post_to_discord_embed(
+            "Tibia Weekly XP Leaderboard",
+            f"No XP gains recorded for the week {week_range[0]} - {week_range[1]}.",
+            color=0x636e72
+        )
+        return
+
+    # Sort rankings
+    weekly_ranking.sort(key=lambda x: x[1], reverse=True)
+
+    # Create leaderboard
+    medals = ["🥇", "🥈", "🥉"]
+    fields = [
+        {"name": f"{(medals[i] if i < 3 else get_ordinal(i + 1))} **{name}**", "value": f"Weekly Total: **+{xp_val:,} XP**", "inline": False}
+        for i, (name, xp_val) in enumerate(weekly_ranking)
+    ]
+
+    # Post to Discord
+    post_to_discord_embed(
+        f"🏆 Tibia Weekly XP Leaderboard 🏆",
+        f"Here are the XP gains for the week {week_range[0]} - {week_range[1]}!\n\n👑 **Top Weekly Gainer:** **{weekly_ranking[0][0]}**",
+        fields=fields, color=0x1abc9c, footer="Tibia Weekly XP Tracker"
+    )
+    print(f"{timestamp()} --- Weekly Report Finished ---")
 
 def run_monthly_report(all_xp):
     """On the 1st of the month, calculates and posts the PREVIOUS month's total XP leaderboard."""
@@ -203,7 +251,6 @@ def run_monthly_report(all_xp):
     )
     print(f"{timestamp()} --- Monthly Report Finished ---")
 
-
 # --- MAIN EXECUTION ---
 
 async def main():
@@ -228,6 +275,9 @@ async def main():
     # Run the daily report every time
     run_daily_report(all_xp)
     
+    # Run the weekly report every time
+    run_weekly_report(all_xp)
+
     # Run the monthly report check every time
     run_monthly_report(all_xp)
 
