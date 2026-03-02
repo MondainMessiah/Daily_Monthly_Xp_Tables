@@ -45,18 +45,23 @@ def update_streak(category, winner_name):
         cat_data["count"] = 1
     all_streaks[category] = cat_data
     save_json(STREAKS_PATH, all_streaks)
-    labels = {"daily": "days", "weekly": "weeks", "monthly": "months"}
-    return cat_data["count"], labels.get(category, "times")
+    return cat_data["count"]
 
 def calculate_growth(category, current_total):
+    """Calculates the +/- difference from the last time this report ran."""
     history = load_json(TOTALS_HISTORY_PATH, {})
     prev_total = history.get(category, 0)
+    
     diff = current_total - prev_total
     prefix = "+" if diff >= 0 else ""
+    
+    # Update history for next run
     history[category] = current_total
     save_json(TOTALS_HISTORY_PATH, history)
+    
     if prev_total == 0:
         return f"Team Total: {current_total:,} XP"
+    
     return f"Team Total: {current_total:,} XP ({prefix}{diff:,} vs prev {category})"
 
 def create_fields(ranking, streak_text=""):
@@ -64,12 +69,12 @@ def create_fields(ranking, streak_text=""):
     if not ranking: return fields
     max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+
     for i, (name, xp_val) in enumerate(ranking[:3]):
         percent = (xp_val / max_xp) if max_xp > 0 else 0
         num_green = round(percent * 10)
         bar = "🟩" * num_green + "⬛" * (10 - num_green)
         
-        # Add streak text only to the 1st place name
         display_name = f"{name}{streak_text}" if i == 0 else name
         
         fields.append({
@@ -77,6 +82,7 @@ def create_fields(ranking, streak_text=""):
             "value": f"+{xp_val:,} XP\n{bar} `{int(percent*100)}%`",
             "inline": False
         })
+
     if len(ranking) > 3:
         others_list = [f"`{idx}.` **{n}** (+{v:,} XP)" for idx, (n, v) in enumerate(ranking[3:], start=4) if v > 0]
         if others_list:
@@ -90,7 +96,15 @@ def create_fields(ranking, streak_text=""):
 def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, footer=""):
     url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not url: return
-    payload = {"embeds": [{"title": title, "description": description, "fields": fields, "color": color, "footer": {"text": footer}}]}
+    payload = {
+        "embeds": [{
+            "title": title, 
+            "description": description, 
+            "fields": fields, 
+            "color": color,
+            "footer": {"text": footer}
+        }]
+    }
     try: requests.post(url, json=payload, timeout=10)
     except: pass
 
@@ -116,7 +130,7 @@ def run_daily_report(all_xp):
     
     total_group_xp = sum(r[1] for r in ranking)
     footer_text = calculate_growth("daily", total_group_xp)
-    count, lbl = update_streak("daily", ranking[0][0])
+    count = update_streak("daily", ranking[0][0])
     streak = f" ({count}x 🥇)" if count > 1 else ""
     
     post_to_discord_embed("🏆 Daily Champion 🏆", f"🗓️ **Date:** {latest}", create_fields(ranking, streak), 0xf1c40f, footer_text)
@@ -131,7 +145,7 @@ def run_weekly_report(all_xp):
     
     total_group_xp = sum(r[1] for r in ranking)
     footer_text = calculate_growth("weekly", total_group_xp)
-    count, lbl = update_streak("weekly", ranking[0][0])
+    count = update_streak("weekly", ranking[0][0])
     streak = f" ({count}x 🥇)" if count > 1 else ""
     
     post_to_discord_embed("🏆 Weekly Champion 🏆", f"🗓️ {s} to {e}", create_fields(ranking, streak), 0x2ecc71, footer_text)
@@ -147,7 +161,7 @@ def run_monthly_report(all_xp):
     
     total_group_xp = sum(r[1] for r in ranking)
     footer_text = calculate_growth("monthly", total_group_xp)
-    count, lbl = update_streak("monthly", ranking[0][0])
+    count = update_streak("monthly", ranking[0][0])
     streak = f" ({count}x 🥇)" if count > 1 else ""
     
     post_to_discord_embed("🏆 Monthly Champion 🏆", f"🗓️ {prev_month_date.strftime('%B %Y')}", create_fields(ranking, streak), 0x3498db, footer_text)
