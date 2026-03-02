@@ -65,7 +65,7 @@ def calculate_growth(category, current_total):
     return f"Team Total: {current_total:,} XP ({prefix}{diff:,} vs prev {category})"
 
 def create_fields(ranking):
-    """Creates podium (Top 3) with bars and 'Other Gains' for the rest."""
+    """Creates podium (Top 3) with bars and 'Other Gains' on separate lines."""
     fields = []
     if not ranking: return fields
     
@@ -83,13 +83,18 @@ def create_fields(ranking):
             "inline": False
         })
 
-    # 2. Simple 'Other Gains' (4th+ place, filtering out 0 XP)
+    # 2. Individual Lines for 4th+ (filtering out 0 XP)
     if len(ranking) > 3:
-        others = [f"`{idx}.` **{n}** (+{v:,})" for idx, (n, v) in enumerate(ranking[3:], start=4) if v > 0]
-        if others:
+        # Create a list of strings, one for each player
+        others_list = [
+            f"`{idx}.` **{n}** (+{v:,} XP)" 
+            for idx, (n, v) in enumerate(ranking[3:], start=4) if v > 0
+        ]
+        
+        if others_list:
             fields.append({
                 "name": "--- Other Gains ---",
-                "value": " • ".join(others),
+                "value": "\n".join(others_list), # New line for every player
                 "inline": False
             })
     return fields
@@ -176,7 +181,7 @@ async def main():
         page = await browser.new_page()
         for name in chars:
             all_xp[name] = await scrape_xp_tab9(name, page)
-            await asyncio.sleep(1) # Delay between requests
+            await asyncio.sleep(1)
         await browser.close()
     save_json(JSON_PATH, all_xp)
     run_daily_report(all_xp)
