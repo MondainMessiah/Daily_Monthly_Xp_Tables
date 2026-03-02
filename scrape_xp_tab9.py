@@ -4,19 +4,21 @@ import asyncio
 import sys
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from pathlib import Path
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import requests
 
-# --- DYNAMIC PATHING FIX ---
-# This ensures files are always created in the script's own folder
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# --- DYNAMIC PATHING (The Fix) ---
+# This forces Python to look at the script's folder, not the "Home" folder
+BASE_DIR = Path(__file__).resolve().parent
 
-CHAR_FILE = os.path.join(SCRIPT_DIR, "characters.txt")
-JSON_PATH = os.path.join(SCRIPT_DIR, "xp_log.json")
-PB_PATH = os.path.join(SCRIPT_DIR, "personal_bests.json")
-STREAKS_PATH = os.path.join(SCRIPT_DIR, "streaks.json")
-TOTALS_HISTORY_PATH = os.path.join(SCRIPT_DIR, "totals_history.json")
+CHAR_FILE = BASE_DIR / "characters.txt"
+JSON_PATH = BASE_DIR / "xp_log.json"
+PB_PATH = BASE_DIR / "personal_bests.json"
+STREAKS_PATH = BASE_DIR / "streaks.json"
+TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
+
 TIMEZONE = "Europe/London"
 
 # --- HELPER FUNCTIONS ---
@@ -24,7 +26,7 @@ def timestamp():
     return datetime.now(ZoneInfo(TIMEZONE)).strftime("[%Y-%m-%d %H:%M:%S]")
 
 def load_json(path, fallback):
-    if os.path.exists(path):
+    if path.exists():
         try:
             with open(path, "r") as f: return json.load(f)
         except: pass
@@ -32,6 +34,15 @@ def load_json(path, fallback):
 
 def save_json(path, data):
     with open(path, "w") as f: json.dump(data, f, indent=2)
+
+def ensure_files_exist():
+    """Forces creation of JSON files so you can verify they exist."""
+    files = [JSON_PATH, PB_PATH, STREAKS_PATH, TOTALS_HISTORY_PATH]
+    for f in files:
+        if not f.exists():
+            with open(f, 'w') as fh:
+                json.dump({}, fh)
+            print(f"✅ Created missing file: {f.name}")
 
 def check_pb(category, name, current_xp):
     pbs = load_json(PB_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
@@ -91,14 +102,10 @@ def create_fields(ranking, category, streak_text=""):
 
 def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, footer=""):
     url = os.environ.get("DISCORD_WEBHOOK_URL")
-    if not url: 
-        print("⚠️ Warning: DISCORD_WEBHOOK_URL environment variable not found.")
-        return
+    if not url: return
     payload = {"embeds": [{"title": title, "description": description, "fields": fields, "color": color, "footer": {"text": footer}}]}
-    try: 
-        resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code == 204: print(f"🚀 {title} posted to Discord!")
-    except Exception as e: print(f"❌ Discord Error: {e}")
+    try: requests.post(url, json=payload, timeout=10)
+    except: pass
 
 # --- SCRAPING ---
 def xp_str_to_int(xp_str):
@@ -121,9 +128,7 @@ def run_daily_report(all_xp):
     if not dates: return
     latest = max(dates)
     ranking = sorted([(n, xp_str_to_int(xp.get(latest))) for n, xp in all_xp.items() if xp.get(latest) and "+" in xp.get(latest)], key=lambda x: x[1], reverse=True)
-    if not ranking: 
-        print(f"ℹ️ No daily gains found for {latest}")
-        return
+    if not ranking: return
     footer_text = calculate_growth("daily", sum(r[1] for r in ranking))
     count = update_streak("daily", ranking[0][0])
     post_to_discord_embed("🏆 Daily Champion 🏆", f"🗓️ **Date:** {latest}", create_fields(ranking, "daily", f" ({count}x 🥇)" if count > 1 else ""), 0xf1c40f, footer_text)
@@ -152,10 +157,13 @@ def run_monthly_report(all_xp):
     post_to_discord_embed("🏆 Monthly Champion 🏆", f"🗓️ {prev_month_date.strftime('%B %Y')}", create_fields(ranking, "monthly", f" ({count}x 🥇)" if count > 1 else ""), 0x3498db, footer_text)
 
 async def main():
-    print(f"--- Starting Scraper at {timestamp()} ---")
-    if not os.path.exists(CHAR_FILE):
-        print(f"❌ Error: {CHAR_FILE} not found!")
+    print(f"--- Process Started at {timestamp()} ---")
+    ensure_files_exist()
+
+    if not CHAR_FILE.exists():
+        print(f"❌ Error: {CHAR_FILE.name} not found in {BASE_DIR}")
         return
+
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     
     all_xp = {}
@@ -164,13 +172,11 @@ async def main():
         page = await browser.new_page()
         for name in chars:
             all_xp[name] = await scrape_xp_tab9(name, page)
-            print(f"🔍 Scraped: {name}")
+            print(f"🔍 Scraped {name}")
             await asyncio.sleep(1)
         await browser.close()
     
-    print("💾 Saving raw data...")
     save_json(JSON_PATH, all_xp)
-    print("📊 Processing Reports...")
     run_daily_report(all_xp)
     run_weekly_report(all_xp)
     run_monthly_report(all_xp)
