@@ -38,7 +38,7 @@ def check_pb(category, name, current_xp):
     if current_xp > record:
         cat_pbs[name] = current_xp
         save_json(PB_PATH, pbs)
-        if record > 0: return " ⭐"
+        if record > 0: return " `⭐`" # PB badge with background
     return ""
 
 def update_streak(category, winner_name):
@@ -61,8 +61,9 @@ def update_streak(category, winner_name):
     save_json(STREAKS_PATH, all_streaks)
     
     count = cat_data["count"]
-    # Streak badge now fully wrapped in backticks for black background
-    badge = f" `{ '👑' if count >= 5 else '🔥' } {count}`"
+    # Wraps both emoji and number in one backtick block
+    emoji = '👑' if count >= 5 else '🔥'
+    badge = f" `{emoji} {count}`"
     return badge, broken_msg
 
 def calculate_growth(category, current_total):
@@ -102,7 +103,6 @@ def create_fields(ranking, category, streak_badge=""):
         current_streak = streak_badge if i == 0 else ""
         display_name = f"{name}{pb_badge}{current_streak}"
         
-        # Wrapped +XP and % in backticks for black background
         fields.append({
             "name": f"{medals[i]} **{display_name}**",
             "value": f"`+{xp_val:,} XP`\n{bar} `{int(percent*100)}%`",
@@ -114,7 +114,6 @@ def create_fields(ranking, category, streak_badge=""):
         for idx, (n, v) in enumerate(ranking[3:], start=4):
             if v > 0:
                 pb = check_pb(category, n, v)
-                # Wrapped "Other Gains" XP in backticks
                 others.append(f"`{idx}.` **{n}** (`+{v:,} XP`){pb}")
         if others:
             fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
