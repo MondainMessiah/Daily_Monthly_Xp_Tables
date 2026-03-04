@@ -61,7 +61,7 @@ def update_streak(category, winner_name):
     save_json(STREAKS_PATH, all_streaks)
     
     count = cat_data["count"]
-    # Black background for the streak badge
+    # Streak badge now fully wrapped in backticks for black background
     badge = f" `{ '👑' if count >= 5 else '🔥' } {count}`"
     return badge, broken_msg
 
@@ -70,7 +70,7 @@ def calculate_growth(category, current_total):
     prev_total = history.get(category, 0)
     
     percent_str = ""
-    color = 0xf1c40f # Gold
+    color = 0xf1c40f 
     
     if prev_total > 0:
         diff = current_total - prev_total
@@ -78,8 +78,8 @@ def calculate_growth(category, current_total):
         prefix = "+" if percent_change >= 0 else ""
         percent_str = f" (`{prefix}{percent_change:.1f}%` vs prev {category})"
         
-        if percent_change > 0: color = 0x2ecc71 # Green
-        elif percent_change < 0: color = 0xe74c3c # Red
+        if percent_change > 0: color = 0x2ecc71 
+        elif percent_change < 0: color = 0xe74c3c 
     
     history[category] = current_total
     save_json(TOTALS_HISTORY_PATH, history)
@@ -99,10 +99,10 @@ def create_fields(ranking, category, streak_badge=""):
         bar = "🟩" * num_green + "⬛" * (10 - num_green)
         pb_badge = check_pb(category, name, xp_val)
         
-        # Add badge only to winner
         current_streak = streak_badge if i == 0 else ""
         display_name = f"{name}{pb_badge}{current_streak}"
         
+        # Wrapped +XP and % in backticks for black background
         fields.append({
             "name": f"{medals[i]} **{display_name}**",
             "value": f"`+{xp_val:,} XP`\n{bar} `{int(percent*100)}%`",
@@ -114,6 +114,7 @@ def create_fields(ranking, category, streak_badge=""):
         for idx, (n, v) in enumerate(ranking[3:], start=4):
             if v > 0:
                 pb = check_pb(category, n, v)
+                # Wrapped "Other Gains" XP in backticks
                 others.append(f"`{idx}.` **{n}** (`+{v:,} XP`){pb}")
         if others:
             fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
@@ -142,7 +143,6 @@ async def main():
 
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     
-    # Load and merge data
     all_xp = load_json(JSON_PATH, {})
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -157,7 +157,6 @@ async def main():
     
     save_json(JSON_PATH, all_xp)
     
-    # Run Daily
     dates = [max(xp.keys()) for xp in all_xp.values() if xp]
     if dates:
         latest = max(dates)
@@ -167,7 +166,6 @@ async def main():
             footer_txt, embed_color = calculate_growth("daily", sum(r[1] for r in rank_d))
             post_to_discord_embed("🏆 Daily Champion 🏆", f"🗓️ Date: {latest}{broken}", create_fields(rank_d, "daily", badge), embed_color, footer_txt)
 
-    # Run Weekly
     today = datetime.now(ZoneInfo(TIMEZONE))
     if today.weekday() == 0:
         s, e = (today - timedelta(days=7)).strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -178,7 +176,6 @@ async def main():
             footer_txt, embed_color = calculate_growth("weekly", sum(r[1] for r in rank_w))
             post_to_discord_embed("🏆 Weekly Champion 🏆", f"🗓️ {s} to {e}{broken}", create_fields(rank_w, "weekly", badge), embed_color, footer_txt)
 
-    # Run Monthly
     if today.day == 1:
         prev_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
         rank_m = sorted([(n, sum(int(v.replace(",", "").replace("+", "")) for d, v in xp.items() if d.startswith(prev_month) and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
