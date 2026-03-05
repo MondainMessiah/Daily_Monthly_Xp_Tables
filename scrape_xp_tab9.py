@@ -44,54 +44,41 @@ def check_pb(category, name, current_xp):
 def update_streak(category, winner_name):
     all_streaks = load_json(STREAKS_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
     cat_data = all_streaks.get(category, {"last_winner": "", "count": 0})
-    
     old_winner = cat_data["last_winner"]
     old_count = cat_data["count"]
-    broken_msg = ""
+    streak_msg = ""
 
     if old_winner == winner_name:
         cat_data["count"] += 1
+        if cat_data["count"] == 5:
+            streak_msg = f"\n👑 **{winner_name}** has reached a 5-win streak and earned the Crown!"
     else:
         if old_winner and old_count >= 3:
-            broken_msg = f"\n⚔️ **{winner_name}** ended **{old_winner}**'s `{old_count}` win streak!"
+            streak_msg = f"\n⚔️ **{winner_name}** ended **{old_winner}**'s `{old_count}` win streak!"
         cat_data["last_winner"] = winner_name
         cat_data["count"] = 1
     
     all_streaks[category] = cat_data
     save_json(STREAKS_PATH, all_streaks)
-    
     count = cat_data["count"]
-    # Logic: standalone 👑 (5+), numbered 🔥 (1-4)
-    if count >= 5:
-        badge = " `👑` "
-    else:
-        badge = f" `🔥 {count}` "
-    return badge, broken_msg
+    badge = " `👑` " if count >= 5 else f" `🔥 {count}` "
+    return badge, streak_msg
 
 def calculate_growth(category, current_total):
     history = load_json(TOTALS_HISTORY_PATH, {})
     prev_total = history.get(category, 0)
-    
     percent_str = ""
     color = 0xf1c40f 
-    
     if prev_total > 0:
         diff = current_total - prev_total
         percent_change = (diff / prev_total) * 100
         prefix = "+" if percent_change >= 0 else ""
-        # Backticks removed from footer comparison
         percent_str = f" ({prefix}{percent_change:.1f}% vs prev {category})"
-        
         if percent_change > 0: color = 0x2ecc71 
         elif percent_change < 0: color = 0xe74c3c 
-    
     history[category] = current_total
     save_json(TOTALS_HISTORY_PATH, history)
-    
-    # Legend updated as requested
     legend = "\n⭐ = New PB\n🔥 = 1-4 Streak\n👑 = 5+ Streak"
-    
-    # Backticks removed from Team Total
     return f"Team Total: {current_total:,} XP{percent_str}{legend}", color
 
 def create_fields(ranking, category, streak_badge=""):
@@ -99,23 +86,17 @@ def create_fields(ranking, category, streak_badge=""):
     if not ranking: return fields
     max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-
     for i, (name, xp_val) in enumerate(ranking[:3]):
         percent = (xp_val / max_xp) if max_xp > 0 else 0
         num_green = round(percent * 10)
         bar = "🟩" * num_green + "⬛" * (10 - num_green)
         pb_badge = check_pb(category, name, xp_val)
-        
-        current_streak = streak_badge if i == 0 else ""
-        display_name = f"{name}{pb_badge}{current_streak}"
-        
-        # Rankings still use backticks for the "terminal" data look
+        display_name = f"{name}{pb_badge}{streak_badge if i == 0 else ''}"
         fields.append({
             "name": f"{medals[i]} **{display_name}**",
             "value": f"`+{xp_val:,} XP`\n{bar} `{int(percent*100)}%`",
             "inline": False
         })
-    
     if len(ranking) > 3:
         others = []
         for idx, (n, v) in enumerate(ranking[3:], start=4):
@@ -144,11 +125,8 @@ async def scrape_xp_tab9(char_name, page):
     except: return {}
 
 async def main():
-    print(f"--- Process Started at {timestamp()} ---")
     if not CHAR_FILE.exists(): return
-
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
-    
     all_xp = load_json(JSON_PATH, {})
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -157,44 +135,34 @@ async def main():
             new_data = await scrape_xp_tab9(name, page)
             if name not in all_xp: all_xp[name] = {}
             all_xp[name].update(new_data)
-            print(f"🔍 Scraped {name}")
             await asyncio.sleep(1)
         await browser.close()
-    
     save_json(JSON_PATH, all_xp)
-    
-    # Run Daily
     dates = [max(xp.keys()) for xp in all_xp.values() if xp]
     if dates:
         latest = max(dates)
         rank_d = sorted([(n, int(xp.get(latest).replace(",", "").replace("+", ""))) for n, xp in all_xp.items() if xp.get(latest) and "+" in xp.get(latest)], key=lambda x: x[1], reverse=True)
         if rank_d:
-            badge, broken = update_streak("daily", rank_d[0][0])
+            badge, announce = update_streak("daily", rank_d[0][0])
             footer_txt, embed_color = calculate_growth("daily", sum(r[1] for r in rank_d))
-            post_to_discord_embed("🏆 Daily Champion 🏆", f"🗓️ Date: {latest}{broken}", create_fields(rank_d, "daily", badge), embed_color, footer_txt)
-
+            post_to_discord_embed("🏆 Daily Champion 🏆", f"🗓️ Date: {latest}{announce}", create_fields(rank_d, "daily", badge), embed_color, footer_txt)
     today = datetime.now(ZoneInfo(TIMEZONE))
-    # Run Weekly
     if today.weekday() == 0:
         s, e = (today - timedelta(days=7)).strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")
         rank_w = sorted([(n, sum(int(v.replace(",", "").replace("+", "")) for d, v in xp.items() if s <= d <= e and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
         rank_w = [r for r in rank_w if r[1] > 0]
         if rank_w:
-            badge, broken = update_streak("weekly", rank_w[0][0])
+            badge, announce = update_streak("weekly", rank_w[0][0])
             footer_txt, embed_color = calculate_growth("weekly", sum(r[1] for r in rank_w))
-            post_to_discord_embed("🏆 Weekly Champion 🏆", f"🗓️ {s} to {e}{broken}", create_fields(rank_w, "weekly", badge), embed_color, footer_txt)
-
-    # Run Monthly
+            post_to_discord_embed("🏆 Weekly Champion 🏆", f"🗓️ {s} to {e}{announce}", create_fields(rank_w, "weekly", badge), embed_color, footer_txt)
     if today.day == 1:
         prev_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
         rank_m = sorted([(n, sum(int(v.replace(",", "").replace("+", "")) for d, v in xp.items() if d.startswith(prev_month) and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
         rank_m = [r for r in rank_m if r[1] > 0]
         if rank_m:
-            badge, broken = update_streak("monthly", rank_m[0][0])
+            badge, announce = update_streak("monthly", rank_m[0][0])
             footer_txt, embed_color = calculate_growth("monthly", sum(r[1] for r in rank_m))
-            post_to_discord_embed("🏆 Monthly Champion 🏆", f"🗓️ {prev_month}{broken}", create_fields(rank_m, "monthly", badge), embed_color, footer_txt)
-
-    print(f"--- Process Finished at {timestamp()} ---")
+            post_to_discord_embed("🏆 Monthly Champion 🏆", f"🗓️ {prev_month}{announce}", create_fields(rank_m, "monthly", badge), embed_color, footer_txt)
 
 if __name__ == "__main__":
     asyncio.run(main())
