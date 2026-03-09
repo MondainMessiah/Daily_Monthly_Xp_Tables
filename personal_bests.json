@@ -1,17 +1,18 @@
 {
   "daily": {
-    "Ilumine": 74331877,
+    "Ilumine": 76645369,
     "Kamikadzei": 54760000,
     "Hex Good": 90493237,
     "Zanron The Monk": 61385874,
     "Jay The Pally": 113867487,
-    "Jay The Monk": 10057
+    "Jay The Monk": 49821
   },
   "weekly": {
-    "Zanron The Monk": 181575634,
+    "Zanron The Monk": 186477669,
     "Hex Good": 170162062,
     "Kamikadzei": 149199976,
-    "Ilumine": 119842439,
-    "Jay The Pally": 45527228
+    "Ilumine": 198375718,
+    "Jay The Pally": 45527228,
+    "Jay The Monk": 59878
   }
 }
