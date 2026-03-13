@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-# --- NEW STEALTH IMPORT ---
 from playwright_stealth import Stealth
 import requests
 
@@ -19,14 +18,6 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
 TIMEZONE = "Europe/London"
 
-def get_target_date():
-    """Determines the most recent completed Tibia day."""
-    now = datetime.now(ZoneInfo(TIMEZONE))
-    # Server Save is 10:00 AM. If checking early, look for yesterday.
-    if now.hour < 10 or (now.hour == 10 and now.minute < 30):
-        return (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    return now.strftime("%Y-%m-%d")
-
 def load_json(path, fallback):
     if path.exists():
         try:
@@ -38,14 +29,11 @@ def save_json(path, data):
     with open(path, "w") as f: json.dump(data, f, indent=2)
 
 # --- THE SCRAPER ---
-async def scrape_xp_tab9(char_name, page, target_date):
+async def scrape_xp_tab9(char_name, page, scrape_date):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        
-        # Give Cloudflare an extra second to redirect if it needs to
-        await asyncio.sleep(1)
-        
+        await asyncio.sleep(1) # Cloudflare buffer
         await page.wait_for_selector("#tabs1 .newTable", timeout=15000)
         
         content = await page.content()
@@ -60,24 +48,21 @@ async def scrape_xp_tab9(char_name, page, target_date):
                 if len(tds) >= 2:
                     date_text = tds[0].get_text(separator=" ", strip=True).split(" ")[0]
                     xp_text = tds[1].get_text(strip=True).replace(",", "").replace("+", "")
-                    
                     try:
                         char_data[date_text] = int(xp_text)
                     except:
                         char_data[date_text] = 0
         
-        if target_date in char_data:
-            val = char_data[target_date]
-            print(f"✅ {char_name}: {val:,} XP")
+        if scrape_date in char_data:
+            val = char_data[scrape_date]
+            print(f"✅ {char_name}: {val:,} XP (Found for {scrape_date})")
             return val
         else:
-            print(f"❓ {char_name}: {target_date} not found.")
+            print(f"❓ {char_name}: {scrape_date} not found.")
             return 0
     except Exception as e:
-        try:
-            page_title = await page.title()
-        except:
-            page_title = "Unknown"
+        try: page_title = await page.title()
+        except: page_title = "Unknown"
         print(f"❌ {char_name}: Error ({type(e).__name__}) - Page Title: '{page_title}'")
         return 0
 
@@ -148,8 +133,11 @@ def create_fields(ranking, category, streak_badge):
 
 # --- MAIN ENGINE ---
 async def main():
-    target_date = get_target_date()
-    print(f"🎯 Target Date: {target_date}")
+    now = datetime.now(ZoneInfo(TIMEZONE))
+    display_date = now.strftime("%Y-%m-%d") # Today (e.g., 2026-03-13)
+    scrape_date = (now - timedelta(days=1)).strftime("%Y-%m-%d") # Yesterday (e.g., 2026-03-12)
+    
+    print(f"🎯 Scraping Data For: {scrape_date} | Discord Display Date: {display_date}")
     
     if not CHAR_FILE.exists():
         print("Error: characters.txt missing.")
@@ -160,14 +148,10 @@ async def main():
     
     final_rankings = []
     
-    # --- NEW STEALTH IMPLEMENTATION ---
     async with Stealth().use_async(async_playwright()) as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-infobars"
-            ]
+            args=["--disable-blink-features=AutomationControlled", "--disable-infobars"]
         )
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -178,10 +162,9 @@ async def main():
         page = await context.new_page()
         
         for name in chars:
-            xp_gain = await scrape_xp_tab9(name, page, target_date)
+            xp_gain = await scrape_xp_tab9(name, page, scrape_date)
             if xp_gain > 0:
                 final_rankings.append((name, xp_gain))
-            
             await asyncio.sleep(5)
             
         await browser.close()
@@ -197,7 +180,7 @@ async def main():
             payload = {
                 "embeds": [{
                     "title": "🏆 Daily Champion 🏆",
-                    "description": f"🗓️ Date: {target_date}{announce}",
+                    "description": f"🗓️ Date: {display_date}{announce}",
                     "fields": create_fields(final_rankings, "daily", badge),
                     "color": color,
                     "footer": {"text": footer}
@@ -206,7 +189,7 @@ async def main():
             requests.post(webhook_url, json=payload, timeout=10)
         print("✅ Discord post sent.")
     else:
-        print(f"❌ No XP found for {target_date}. No post sent.")
+        print(f"❌ No XP found for {scrape_date}. No post sent.")
 
 if __name__ == "__main__":
     asyncio.run(main())
