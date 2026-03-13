@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import requests
 
-# --- SETTINGS ---
+# --- SETTINGS & PATHING ---
 BASE_DIR = Path(__file__).resolve().parent
 CHAR_FILE = BASE_DIR / "characters.txt"
 JSON_PATH = BASE_DIR / "xp_log.json"
@@ -18,7 +18,7 @@ TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
 TIMEZONE = "Europe/London"
 
 def get_target_date():
-    """Strictly yesterday."""
+    """Strictly targets yesterday's date, as Tibia server saves reflect the previous day."""
     return (datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 def load_json(path, fallback):
@@ -37,13 +37,14 @@ def post_to_discord(payload):
         try: requests.post(url, json=payload, timeout=10)
         except: pass
 
-# --- SCRAPER ---
+# --- STEALTH SCRAPER ---
 async def scrape_xp_tab9(char_name, page, target_date):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
+    # Try up to 2 times to account for GuildStats connection lag
     for attempt in range(2):
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=40000)
-            await asyncio.sleep(3) 
+            await asyncio.sleep(3) # Let JavaScript build the table
             await page.wait_for_selector("#tabs1 > .newTable", timeout=15000)
             
             soup = BeautifulSoup(await page.content(), "html.parser")
@@ -59,24 +60,43 @@ async def scrape_xp_tab9(char_name, page, target_date):
             if target_date in char_data:
                 print(f"✅ {char_name}: Found {target_date}")
                 return char_data
+            
+            # If we get here, the page loaded but today's data isn't there yet
             return {}
-        except:
+        except Exception as e:
+            print(f"⚠️ {char_name} (Attempt {attempt+1}): {type(e).__name__}")
             await asyncio.sleep(2)
     return {}
 
-# --- LOGIC ---
+# --- LOGIC & FORMATTING FUNCTIONS ---
+def check_pb(category, name, current_xp):
+    pbs = load_json(PB_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
+    cat_pbs = pbs.setdefault(category, {})
+    record = cat_pbs.get(name, 0)
+    if current_xp > record:
+        cat_pbs[name] = current_xp
+        save_json(PB_PATH, pbs)
+        if record > 0: return " `⭐` "
+    return ""
+
 def update_streak(category, winner_name):
     all_streaks = load_json(STREAKS_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
     cat_data = all_streaks.get(category, {"last_winner": "", "count": 0})
     old_winner, old_count = cat_data["last_winner"], cat_data["count"]
     msg = ""
+    
     if old_winner == winner_name:
         cat_data["count"] += 1
-        if cat_data["count"] == 5: msg = f"\n👑 **{winner_name}** earned the Crown!"
+        if cat_data["count"] == 5: 
+            msg = f"\n👑 **{winner_name}** earned the Crown!"
     else:
-        if old_winner and old_count >= 3: msg = f"\n⚔️ **{winner_name}** ended **{old_winner}**'s `{old_count}` streak!"
+        if old_winner and old_count >= 3: 
+            msg = f"\n⚔️ **{winner_name}** ended **{old_winner}**'s `{old_count}` win streak!"
         cat_data["last_winner"], cat_data["count"] = winner_name, 1
+        
     save_json(STREAKS_PATH, all_streaks)
+    
+    # 👑 is standalone (5+), 🔥 shows count (1-4)
     badge = " `👑` " if cat_data["count"] >= 5 else f" `🔥 {cat_data['count']}` "
     return badge, msg
 
@@ -84,38 +104,62 @@ def calculate_growth(category, current_total):
     history = load_json(TOTALS_HISTORY_PATH, {})
     prev = history.get(category, 0)
     p_str, color = "", 0xf1c40f 
+    
     if prev > 0:
         pc = ((current_total - prev) / prev) * 100
         p_str = f" ({'+' if pc >= 0 else ''}{pc:.1f}% vs last {category})"
         color = 0x2ecc71 if pc > 0 else 0xe74c3c
+        
     history[category] = current_total
     save_json(TOTALS_HISTORY_PATH, history)
-    return f"Team Total: {current_total:,} XP{p_str}\n⭐ = New PB | 🔥 = 1-4 Streak | 👑 = 5+ Streak", color
+    
+    # Clean text footer (no backticks)
+    legend = "\n⭐ = New PB | 🔥 = 1-4 Streak | 👑 = 5+ Streak"
+    return f"Team Total: {current_total:,} XP{p_str}{legend}", color
 
 def create_fields(ranking, category, streak_badge):
     fields = []
+    if not ranking: return fields
     max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+    
     for i, (name, xp_val) in enumerate(ranking[:3]):
         percent = (xp_val / max_xp) if max_xp > 0 else 0
         bar = "🟩" * round(percent * 10) + "⬛" * (10 - round(percent * 10))
-        fields.append({"name": f"{medals[i]} **{name}{streak_badge if i==0 else ''}**", "value": f"`+{xp_val:,} XP`\n{bar} `{int(percent*100)}%`", "inline": False})
-    others = [f"`{idx}.` **{n}** (`+{v:,} XP`)" for idx, (n, v) in enumerate(ranking[3:], start=4) if v > 0]
+        pb = check_pb(category, name, xp_val)
+        
+        # Rankings use backticks for the stats/percentages
+        fields.append({
+            "name": f"{medals[i]} **{name}{pb}{streak_badge if i==0 else ''}**", 
+            "value": f"`+{xp_val:,} XP`\n{bar} `{int(percent*100)}%`", 
+            "inline": False
+        })
+        
+    others = [f"`{idx}.` **{n}** (`+{v:,} XP`){check_pb(category, n, v)}" for idx, (n, v) in enumerate(ranking[3:], start=4) if v > 0]
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
     return fields
 
-# --- MAIN ---
+# --- MAIN ENGINE ---
 async def main():
     target_date = get_target_date()
     print(f"🎯 Target: {target_date}")
-    if not CHAR_FILE.exists(): return
+    
+    # 1. Check for characters.txt and alert Discord if missing
+    if not CHAR_FILE.exists(): 
+        error_msg = f"❌ ERROR: Cannot find the file at {CHAR_FILE}"
+        print(error_msg)
+        post_to_discord({"content": f"🚨 **Bot Error:** I cannot find the `characters.txt` file to read the player list. Please check the repository path!"})
+        return
+
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     
     all_xp = load_json(JSON_PATH, {})
     async with async_playwright() as p:
+        # Anti-bot measures added
         browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-        context = await browser.new_context(user_agent="Mozilla/5.0...")
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36")
         page = await context.new_page()
+        
         for name in chars:
             new_data = await scrape_xp_tab9(name, page, target_date)
             if new_data:
@@ -125,15 +169,27 @@ async def main():
         await browser.close()
     
     save_json(JSON_PATH, all_xp)
+    
+    # 2. Filter ranking strictly for yesterday's date
     rank_d = sorted([(n, int(d[target_date].replace(",","").replace("+",""))) for n, d in all_xp.items() if target_date in d], key=lambda x: x[1], reverse=True)
     rank_d = [r for r in rank_d if r[1] > 0]
 
+    # 3. Post to Discord (Leaderboard OR Missing Data Alert)
     if rank_d:
         badge, announce = update_streak("daily", rank_d[0][0])
         footer, color = calculate_growth("daily", sum(r[1] for r in rank_d))
-        post_to_discord({"embeds": [{"title": "🏆 Daily Champion 🏆", "description": f"🗓️ Date: {target_date}{announce}", "fields": create_fields(rank_d, "daily", badge), "color": color, "footer": {"text": footer}}]})
+        post_to_discord({
+            "embeds": [{
+                "title": "🏆 Daily Champion 🏆", 
+                "description": f"🗓️ Date: {target_date}{announce}", 
+                "fields": create_fields(rank_d, "daily", badge), 
+                "color": color, 
+                "footer": {"text": footer}
+            }]
+        })
+        print("✅ Discord embed posted successfully!")
     else:
-        # Alert that data is missing
+        print(f"⚠️ No data found for {target_date}. Sending alert to Discord.")
         post_to_discord({"content": f"⚠️ **Data Missing:** GuildStats has not updated the highscores for `{target_date}` yet. I'll try again on the next scheduled run."})
 
 if __name__ == "__main__":
