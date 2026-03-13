@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import requests
 
-# --- DYNAMIC PATHING ---
+# --- SETTINGS ---
 BASE_DIR = Path(__file__).resolve().parent
 CHAR_FILE = BASE_DIR / "characters.txt"
 JSON_PATH = BASE_DIR / "xp_log.json"
@@ -17,9 +17,13 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
 TIMEZONE = "Europe/London"
 
-# --- HELPER FUNCTIONS ---
-def timestamp():
-    return datetime.now(ZoneInfo(TIMEZONE)).strftime("[%Y-%m-%d %H:%M:%S]")
+def get_target_date():
+    """Returns the date of the most recent Tibia Server Save."""
+    now = datetime.now(ZoneInfo(TIMEZONE))
+    # If it's before 10:00 AM, the most recent save was yesterday
+    if now.hour < 10:
+        return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    return now.strftime("%Y-%m-%d")
 
 def load_json(path, fallback):
     if path.exists():
@@ -31,16 +35,37 @@ def load_json(path, fallback):
 def save_json(path, data):
     with open(path, "w") as f: json.dump(data, f, indent=2)
 
-def check_pb(category, name, current_xp):
-    pbs = load_json(PB_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
-    cat_pbs = pbs.setdefault(category, {})
-    record = cat_pbs.get(name, 0)
-    if current_xp > record:
-        cat_pbs[name] = current_xp
-        save_json(PB_PATH, pbs)
-        if record > 0: return " `⭐` "
-    return ""
+# --- REFINED SCRAPER ---
+async def scrape_xp_tab9(char_name, page, target_date):
+    url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
+    try:
+        # Increased timeout and wait for network to settle
+        await page.goto(url, wait_until="networkidle", timeout=60000)
+        await page.wait_for_selector("#tabs1 > .newTable", timeout=20000)
+        
+        soup = BeautifulSoup(await page.content(), "html.parser")
+        table = soup.select_one("#tabs1 > .newTable")
+        
+        rows = table.find_all("tr")[1:]
+        char_data = {}
+        for row in rows:
+            tds = row.find_all("td")
+            if len(tds) >= 2:
+                date_str = tds[0].get_text(strip=True)
+                xp_str = tds[1].get_text(strip=True)
+                char_data[date_str] = xp_str
+        
+        if target_date in char_data:
+            print(f"✅ Found {target_date} for {char_name}: {char_data[target_date]}")
+        else:
+            print(f"⚠️ {target_date} NOT found for {char_name}. Latest on site: {list(char_data.keys())[0] if char_data else 'None'}")
+            
+        return char_data
+    except Exception as e:
+        print(f"❌ Error scraping {char_name}: {e}")
+        return {}
 
+# --- UPDATED RANKING LOGIC ---
 def update_streak(category, winner_name):
     all_streaks = load_json(STREAKS_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
     cat_data = all_streaks.get(category, {"last_winner": "", "count": 0})
@@ -60,8 +85,7 @@ def update_streak(category, winner_name):
     
     all_streaks[category] = cat_data
     save_json(STREAKS_PATH, all_streaks)
-    count = cat_data["count"]
-    badge = " `👑` " if count >= 5 else f" `🔥 {count}` "
+    badge = " `👑` " if cat_data["count"] >= 5 else f" `🔥 {cat_data['count']}` "
     return badge, streak_msg
 
 def calculate_growth(category, current_total):
@@ -72,14 +96,22 @@ def calculate_growth(category, current_total):
     if prev_total > 0:
         diff = current_total - prev_total
         percent_change = (diff / prev_total) * 100
-        prefix = "+" if percent_change >= 0 else ""
-        percent_str = f" ({prefix}{percent_change:.1f}% vs prev {category})"
-        if percent_change > 0: color = 0x2ecc71 
-        elif percent_change < 0: color = 0xe74c3c 
+        percent_str = f" ({'+' if percent_change >= 0 else ''}{percent_change:.1f}% vs prev {category})"
+        color = 0x2ecc71 if percent_change > 0 else 0xe74c3c
     history[category] = current_total
     save_json(TOTALS_HISTORY_PATH, history)
     legend = "\n⭐ = New PB\n🔥 = 1-4 Streak\n👑 = 5+ Streak"
     return f"Team Total: {current_total:,} XP{percent_str}{legend}", color
+
+def check_pb(category, name, current_xp):
+    pbs = load_json(PB_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
+    cat_pbs = pbs.setdefault(category, {})
+    record = cat_pbs.get(name, 0)
+    if current_xp > record:
+        cat_pbs[name] = current_xp
+        save_json(PB_PATH, pbs)
+        return " `⭐` " if record > 0 else ""
+    return ""
 
 def create_fields(ranking, category, streak_badge=""):
     fields = []
@@ -88,81 +120,62 @@ def create_fields(ranking, category, streak_badge=""):
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
     for i, (name, xp_val) in enumerate(ranking[:3]):
         percent = (xp_val / max_xp) if max_xp > 0 else 0
-        num_green = round(percent * 10)
-        bar = "🟩" * num_green + "⬛" * (10 - num_green)
-        pb_badge = check_pb(category, name, xp_val)
-        display_name = f"{name}{pb_badge}{streak_badge if i == 0 else ''}"
+        bar = "🟩" * round(percent * 10) + "⬛" * (10 - round(percent * 10))
+        pb = check_pb(category, name, xp_val)
         fields.append({
-            "name": f"{medals[i]} **{display_name}**",
+            "name": f"{medals[i]} **{name}{pb}{streak_badge if i == 0 else ''}**",
             "value": f"`+{xp_val:,} XP`\n{bar} `{int(percent*100)}%`",
             "inline": False
         })
     if len(ranking) > 3:
-        others = []
-        for idx, (n, v) in enumerate(ranking[3:], start=4):
-            if v > 0:
-                pb = check_pb(category, n, v)
-                others.append(f"`{idx}.` **{n}** (`+{v:,} XP`){pb}")
-        if others:
-            fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
+        others = [f"`{idx}.` **{n}** (`+{v:,} XP`){check_pb(category, n, v)}" for idx, (n, v) in enumerate(ranking[3:], start=4) if v > 0]
+        if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
     return fields
 
-def post_to_discord_embed(title, description, fields=None, color=0xf1c40f, footer=""):
+def post_to_discord(title, description, fields, color, footer):
     url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not url: return
-    payload = {"embeds": [{"title": title, "description": description, "fields": fields, "color": color, "footer": {"text": footer}}]}
-    try: requests.post(url, json=payload, timeout=10)
-    except: pass
+    requests.post(url, json={"embeds": [{"title": title, "description": description, "fields": fields, "color": color, "footer": {"text": footer}}]}, timeout=10)
 
-async def scrape_xp_tab9(char_name, page):
-    url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
-    try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_selector("#tabs1 > .newTable", timeout=15000)
-        soup = BeautifulSoup(await page.content(), "html.parser")
-        table = soup.select_one("#tabs1 > .newTable")
-        return {tds[0].get_text(strip=True): tds[1].get_text(strip=True) for row in table.find_all("tr")[1:] if len((tds := row.find_all("td"))) >= 2}
-    except: return {}
-
+# --- MAIN ENGINE ---
 async def main():
+    target_date = get_target_date()
+    print(f"🎯 Target Date for today's run: {target_date}")
+    
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
+    
     all_xp = load_json(JSON_PATH, {})
+    
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0")
+        page = await context.new_page()
+        
         for name in chars:
-            new_data = await scrape_xp_tab9(name, page)
+            new_data = await scrape_xp_tab9(name, page, target_date)
             if name not in all_xp: all_xp[name] = {}
             all_xp[name].update(new_data)
-            await asyncio.sleep(1)
+            await asyncio.sleep(1.5)
         await browser.close()
+    
     save_json(JSON_PATH, all_xp)
-    dates = [max(xp.keys()) for xp in all_xp.values() if xp]
-    if dates:
-        latest = max(dates)
-        rank_d = sorted([(n, int(xp.get(latest).replace(",", "").replace("+", ""))) for n, xp in all_xp.items() if xp.get(latest) and "+" in xp.get(latest)], key=lambda x: x[1], reverse=True)
-        if rank_d:
-            badge, announce = update_streak("daily", rank_d[0][0])
-            footer_txt, embed_color = calculate_growth("daily", sum(r[1] for r in rank_d))
-            post_to_discord_embed("🏆 Daily Champion 🏆", f"🗓️ Date: {latest}{announce}", create_fields(rank_d, "daily", badge), embed_color, footer_txt)
-    today = datetime.now(ZoneInfo(TIMEZONE))
-    if today.weekday() == 0:
-        s, e = (today - timedelta(days=7)).strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")
-        rank_w = sorted([(n, sum(int(v.replace(",", "").replace("+", "")) for d, v in xp.items() if s <= d <= e and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
-        rank_w = [r for r in rank_w if r[1] > 0]
-        if rank_w:
-            badge, announce = update_streak("weekly", rank_w[0][0])
-            footer_txt, embed_color = calculate_growth("weekly", sum(r[1] for r in rank_w))
-            post_to_discord_embed("🏆 Weekly Champion 🏆", f"🗓️ {s} to {e}{announce}", create_fields(rank_w, "weekly", badge), embed_color, footer_txt)
-    if today.day == 1:
-        prev_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
-        rank_m = sorted([(n, sum(int(v.replace(",", "").replace("+", "")) for d, v in xp.items() if d.startswith(prev_month) and "+" in v)) for n, xp in all_xp.items() if xp], key=lambda x: x[1], reverse=True)
-        rank_m = [r for r in rank_m if r[1] > 0]
-        if rank_m:
-            badge, announce = update_streak("monthly", rank_m[0][0])
-            footer_txt, embed_color = calculate_growth("monthly", sum(r[1] for r in rank_m))
-            post_to_discord_embed("🏆 Monthly Champion 🏆", f"🗓️ {prev_month}{announce}", create_fields(rank_m, "monthly", badge), embed_color, footer_txt)
+    
+    # Process Ranking based on Target Date
+    rank_d = []
+    for name, dates in all_xp.items():
+        if target_date in dates:
+            val = int(dates[target_date].replace(",", "").replace("+", ""))
+            if val > 0: rank_d.append((name, val))
+    
+    rank_d.sort(key=lambda x: x[1], reverse=True)
+    
+    if rank_d:
+        badge, announce = update_streak("daily", rank_d[0][0])
+        footer, color = calculate_growth("daily", sum(r[1] for r in rank_d))
+        post_to_discord("🏆 Daily Champion 🏆", f"🗓️ Date: {target_date}{announce}", create_fields(rank_d, "daily", badge), color, footer)
+    else:
+        print(f"⚠️ No XP data found for {target_date}. Discord post skipped.")
 
 if __name__ == "__main__":
     asyncio.run(main())
