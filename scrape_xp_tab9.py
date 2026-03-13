@@ -148,30 +148,37 @@ async def main():
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     
     all_xp = load_json(JSON_PATH, {})
+    
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080}
-        )
-        
         for name in chars:
-            # Create a brand new tab for every character to avoid rate-limiting
+            # 1. Launch a completely fresh browser for EVERY character
+            browser = await p.chromium.launch(headless=True, args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ])
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport={'width': 1920, 'height': 1080}
+            )
             page = await context.new_page()
+            
+            # 2. Scrape the character
             new_data = await scrape_xp_tab9(name, page, target_date)
             
             if new_data:
                 if name not in all_xp: all_xp[name] = {}
                 all_xp[name].update(new_data)
                 
-            await page.close() # Close the tab when done
+            # 3. Completely close the browser to wipe the session
+            await context.close()
+            await browser.close()
             
-            # Random delay between 3 and 6 seconds so it acts like a human
-            delay = random.uniform(3.0, 6.0)
+            # 4. Wait a random amount of time before launching the next browser
+            delay = random.uniform(4.0, 8.0)
+            print(f"💤 Resting for {delay:.1f}s to avoid bot detection...")
             await asyncio.sleep(delay) 
             
-        await browser.close()
-    
     save_json(JSON_PATH, all_xp)
     
     rank_d = sorted([(n, int(d[target_date].replace(",","").replace("+",""))) for n, d in all_xp.items() if target_date in d], key=lambda x: x[1], reverse=True)
