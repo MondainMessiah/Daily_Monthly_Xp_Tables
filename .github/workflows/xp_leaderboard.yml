@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # Opt-in to the new engine now
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # Opt-in to the new Node 24 engine
 
 jobs:
   build:
@@ -25,7 +25,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright beautifulsoup4 requests
+          pip install playwright beautifulsoup4 requests playwright-stealth
           playwright install chromium
 
       - name: Run Scraper
