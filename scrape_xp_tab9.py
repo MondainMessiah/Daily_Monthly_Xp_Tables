@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -40,7 +41,6 @@ def post_to_discord(payload):
 # --- STEALTH SCRAPER ---
 async def scrape_xp_tab9(char_name, page, target_date):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
-    # Try up to 2 times to account for GuildStats connection lag
     for attempt in range(2):
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=40000)
@@ -61,11 +61,10 @@ async def scrape_xp_tab9(char_name, page, target_date):
                 print(f"✅ {char_name}: Found {target_date}")
                 return char_data
             
-            # If we get here, the page loaded but today's data isn't there yet
             return {}
         except Exception as e:
             print(f"⚠️ {char_name} (Attempt {attempt+1}): {type(e).__name__}")
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
     return {}
 
 # --- LOGIC & FORMATTING FUNCTIONS ---
@@ -95,8 +94,6 @@ def update_streak(category, winner_name):
         cat_data["last_winner"], cat_data["count"] = winner_name, 1
         
     save_json(STREAKS_PATH, all_streaks)
-    
-    # 👑 is standalone (5+), 🔥 shows count (1-4)
     badge = " `👑` " if cat_data["count"] >= 5 else f" `🔥 {cat_data['count']}` "
     return badge, msg
 
@@ -113,7 +110,6 @@ def calculate_growth(category, current_total):
     history[category] = current_total
     save_json(TOTALS_HISTORY_PATH, history)
     
-    # Clean text footer (no backticks)
     legend = "\n⭐ = New PB | 🔥 = 1-4 Streak | 👑 = 5+ Streak"
     return f"Team Total: {current_total:,} XP{p_str}{legend}", color
 
@@ -128,7 +124,6 @@ def create_fields(ranking, category, streak_badge):
         bar = "🟩" * round(percent * 10) + "⬛" * (10 - round(percent * 10))
         pb = check_pb(category, name, xp_val)
         
-        # Rankings use backticks for the stats/percentages
         fields.append({
             "name": f"{medals[i]} **{name}{pb}{streak_badge if i==0 else ''}**", 
             "value": f"`+{xp_val:,} XP`\n{bar} `{int(percent*100)}%`", 
@@ -144,37 +139,44 @@ async def main():
     target_date = get_target_date()
     print(f"🎯 Target: {target_date}")
     
-    # 1. Check for characters.txt and alert Discord if missing
     if not CHAR_FILE.exists(): 
         error_msg = f"❌ ERROR: Cannot find the file at {CHAR_FILE}"
         print(error_msg)
-        post_to_discord({"content": f"🚨 **Bot Error:** I cannot find the `characters.txt` file to read the player list. Please check the repository path!"})
+        post_to_discord({"content": f"🚨 **Bot Error:** I cannot find the `characters.txt` file."})
         return
 
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     
     all_xp = load_json(JSON_PATH, {})
     async with async_playwright() as p:
-        # Anti-bot measures added
         browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36")
-        page = await context.new_page()
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={'width': 1920, 'height': 1080}
+        )
         
         for name in chars:
+            # Create a brand new tab for every character to avoid rate-limiting
+            page = await context.new_page()
             new_data = await scrape_xp_tab9(name, page, target_date)
+            
             if new_data:
                 if name not in all_xp: all_xp[name] = {}
                 all_xp[name].update(new_data)
-            await asyncio.sleep(1.5)
+                
+            await page.close() # Close the tab when done
+            
+            # Random delay between 3 and 6 seconds so it acts like a human
+            delay = random.uniform(3.0, 6.0)
+            await asyncio.sleep(delay) 
+            
         await browser.close()
     
     save_json(JSON_PATH, all_xp)
     
-    # 2. Filter ranking strictly for yesterday's date
     rank_d = sorted([(n, int(d[target_date].replace(",","").replace("+",""))) for n, d in all_xp.items() if target_date in d], key=lambda x: x[1], reverse=True)
     rank_d = [r for r in rank_d if r[1] > 0]
 
-    # 3. Post to Discord (Leaderboard OR Missing Data Alert)
     if rank_d:
         badge, announce = update_streak("daily", rank_d[0][0])
         footer, color = calculate_growth("daily", sum(r[1] for r in rank_d))
@@ -189,7 +191,7 @@ async def main():
         })
         print("✅ Discord embed posted successfully!")
     else:
-        print(f"⚠️ No data found for {target_date}. Sending alert to Discord.")
+        print(f"⚠️ No data found for {target_date}.")
         post_to_discord({"content": f"⚠️ **Data Missing:** GuildStats has not updated the highscores for `{target_date}` yet. I'll try again on the next scheduled run."})
 
 if __name__ == "__main__":
