@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+# --- NEW IMPORT ---
+from playwright_stealth import stealth_async
 import requests
 
 # --- SETTINGS ---
@@ -18,9 +20,7 @@ TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
 TIMEZONE = "Europe/London"
 
 def get_target_date():
-    """Determines the most recent completed Tibia day."""
     now = datetime.now(ZoneInfo(TIMEZONE))
-    # Server Save is 10:00 AM. If checking early, look for yesterday.
     if now.hour < 10 or (now.hour == 10 and now.minute < 30):
         return (now - timedelta(days=1)).strftime("%Y-%m-%d")
     return now.strftime("%Y-%m-%d")
@@ -39,8 +39,11 @@ def save_json(path, data):
 async def scrape_xp_tab9(char_name, page, target_date):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     try:
-        # Increased timeout slightly for slower GitHub runners
         await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        
+        # Give Cloudflare an extra second to redirect if it needs to
+        await asyncio.sleep(1)
+        
         await page.wait_for_selector("#tabs1 .newTable", timeout=15000)
         
         content = await page.content()
@@ -69,7 +72,6 @@ async def scrape_xp_tab9(char_name, page, target_date):
             print(f"❓ {char_name}: {target_date} not found.")
             return 0
     except Exception as e:
-        # Added debug title so we can see WHAT page it got stuck on
         try:
             page_title = await page.title()
         except:
@@ -157,18 +159,32 @@ async def main():
     final_rankings = []
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        # Added realistic User-Agent so we don't look like a bot
+        # Launch with specific anti-detection arguments
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars"
+            ]
+        )
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="en-US",
+            timezone_id="Europe/London"
         )
         page = await context.new_page()
+        
+        # Apply the stealth plugin to the page to hide Playwright's tracks
+        await stealth_async(page)
         
         for name in chars:
             xp_gain = await scrape_xp_tab9(name, page, target_date)
             if xp_gain > 0:
                 final_rankings.append((name, xp_gain))
-            await asyncio.sleep(2) # Polite delay
+            
+            # Increase delay to 5 seconds so Cloudflare doesn't flag us for spamming
+            await asyncio.sleep(5)
             
         await browser.close()
     
