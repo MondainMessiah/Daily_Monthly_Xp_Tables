@@ -39,7 +39,6 @@ def save_json(path, data):
 async def scrape_xp_tab9(char_name, page, target_date):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     try:
-        # Load page and wait for the specific table structure you provided
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await page.wait_for_selector("#tabs1 .newTable", timeout=15000)
         
@@ -53,14 +52,12 @@ async def scrape_xp_tab9(char_name, page, target_date):
             for row in rows:
                 tds = row.find_all("td")
                 if len(tds) >= 2:
-                    # Logic for: <td>2026-03-12 <i class="fas fa-blank"></i></td>
                     date_text = tds[0].get_text(separator=" ", strip=True).split(" ")[0]
-                    # Logic for: <td><span style="...">+824,106</span></td>
                     xp_text = tds[1].get_text(strip=True).replace(",", "").replace("+", "")
                     
                     try:
                         char_data[date_text] = int(xp_text)
-                    extra:
+                    except:
                         char_data[date_text] = 0
         
         if target_date in char_data:
@@ -122,7 +119,6 @@ def create_fields(ranking, category, streak_badge):
     max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
     
-    # Top 3 with Bars
     for i, (name, xp_val) in enumerate(ranking[:3]):
         percent = (xp_val / max_xp) if max_xp > 0 else 0
         bar = "🟩" * round(percent * 10) + "⬛" * (10 - round(percent * 10))
@@ -133,7 +129,6 @@ def create_fields(ranking, category, streak_badge):
             "inline": False
         })
     
-    # Others
     others = [f"`{idx}.` **{n}** (`+{v:,} XP`){check_pb(category, n, v)}" 
               for idx, (n, v) in enumerate(ranking[3:], start=4)]
     if others:
