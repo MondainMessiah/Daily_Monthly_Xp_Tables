@@ -39,7 +39,8 @@ def save_json(path, data):
 async def scrape_xp_tab9(char_name, page, target_date):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # Increased timeout slightly for slower GitHub runners
+        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
         await page.wait_for_selector("#tabs1 .newTable", timeout=15000)
         
         content = await page.content()
@@ -68,7 +69,12 @@ async def scrape_xp_tab9(char_name, page, target_date):
             print(f"❓ {char_name}: {target_date} not found.")
             return 0
     except Exception as e:
-        print(f"❌ {char_name}: Error ({type(e).__name__})")
+        # Added debug title so we can see WHAT page it got stuck on
+        try:
+            page_title = await page.title()
+        except:
+            page_title = "Unknown"
+        print(f"❌ {char_name}: Error ({type(e).__name__}) - Page Title: '{page_title}'")
         return 0
 
 # --- RANKING LOGIC ---
@@ -152,13 +158,17 @@ async def main():
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+        # Added realistic User-Agent so we don't look like a bot
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
         
         for name in chars:
             xp_gain = await scrape_xp_tab9(name, page, target_date)
             if xp_gain > 0:
                 final_rankings.append((name, xp_gain))
-            await asyncio.sleep(1)
+            await asyncio.sleep(2) # Polite delay
             
         await browser.close()
     
