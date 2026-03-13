@@ -6,8 +6,8 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-# --- NEW IMPORT ---
-from playwright_stealth import stealth_async
+# --- NEW STEALTH IMPORT ---
+from playwright_stealth import Stealth
 import requests
 
 # --- SETTINGS ---
@@ -20,7 +20,9 @@ TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
 TIMEZONE = "Europe/London"
 
 def get_target_date():
+    """Determines the most recent completed Tibia day."""
     now = datetime.now(ZoneInfo(TIMEZONE))
+    # Server Save is 10:00 AM. If checking early, look for yesterday.
     if now.hour < 10 or (now.hour == 10 and now.minute < 30):
         return (now - timedelta(days=1)).strftime("%Y-%m-%d")
     return now.strftime("%Y-%m-%d")
@@ -158,8 +160,8 @@ async def main():
     
     final_rankings = []
     
-    async with async_playwright() as p:
-        # Launch with specific anti-detection arguments
+    # --- NEW STEALTH IMPLEMENTATION ---
+    async with Stealth().use_async(async_playwright()) as p:
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -175,15 +177,11 @@ async def main():
         )
         page = await context.new_page()
         
-        # Apply the stealth plugin to the page to hide Playwright's tracks
-        await stealth_async(page)
-        
         for name in chars:
             xp_gain = await scrape_xp_tab9(name, page, target_date)
             if xp_gain > 0:
                 final_rankings.append((name, xp_gain))
             
-            # Increase delay to 5 seconds so Cloudflare doesn't flag us for spamming
             await asyncio.sleep(5)
             
         await browser.close()
