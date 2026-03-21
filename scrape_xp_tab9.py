@@ -7,15 +7,17 @@ from pathlib import Path
 
 # --- SETTINGS ---
 BASE_DIR = Path(__file__).resolve().parent
-CHAR_FILE = BASE_DIR / "characters.txt"
-LOG_PATH = BASE_DIR / "xp_log.json"      # Master record of daily gains
-TOTALS_PATH = BASE_DIR / "xp_totals.json" # Last known total XP
+LOG_PATH = BASE_DIR / "xp_log.json"      # Your master source
 STATE_PATH = BASE_DIR / "post_state.json"
 TIMEZONE = "Europe/London"
 
-def get_date(days_ago):
+def get_yesterday_dates():
     tz = ZoneInfo(TIMEZONE)
-    return (datetime.now(tz) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+    yesterday = datetime.now(tz) - timedelta(days=1)
+    return [
+        yesterday.strftime("%Y-%m-%d"), # 2026-03-20
+        yesterday.strftime("%d/%m/%Y")  # 20/03/2026
+    ]
 
 def load_json(path, fallback):
     if path.exists():
@@ -27,89 +29,88 @@ def load_json(path, fallback):
 def save_json(path, data):
     with open(path, "w") as f: json.dump(data, f, indent=2)
 
-def fetch_current_total(name):
-    url = f"https://api.tibiadata.com/v4/character/{name.replace(' ', '%20')}"
+def parse_xp(val):
+    """Turns '+1,234,567' or 1234567 into a clean integer."""
     try:
-        r = requests.get(url, timeout=15)
-        if r.status_code == 200:
-            return r.json().get("character", {}).get("character", {}).get("experience", 0)
-    except: pass
-    return 0
+        if isinstance(val, int): return val
+        return int(str(val).replace(",", "").replace("+", "").strip())
+    except: return 0
 
-# --- MAIN ENGINE ---
+# --- MAIN REPORTER ---
 def main():
-    today = get_date(0)
-    yesterday = get_date(1)
+    target_dates = get_yesterday_dates()
+    iso_yesterday = target_dates[0]
     
-    with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
-    
-    # 1. UPDATE LOGS FOR TODAY
-    totals = load_json(TOTALS_PATH, {})
-    logs = load_json(LOG_PATH, {})
-    
-    print(f"📡 Updating daily gains in {LOG_PATH.name} for {today}...")
-    for name in chars:
-        current_total = fetch_current_total(name)
-        if current_total == 0: continue
-        
-        last_total = totals.get(name, 0)
-        if last_total > 0:
-            gain = current_total - last_total
-            if gain >= 0:
-                if name not in logs: logs[name] = {}
-                logs[name][today] = f"+{gain:,}"
-        
-        totals[name] = current_total
-    
-    save_json(TOTALS_PATH, totals)
-    save_json(LOG_PATH, logs)
+    print(f"📊 Searching for Yesterday's results ({' or '.join(target_dates)}) in {LOG_PATH.name}...")
 
-    # 2. POST RESULTS FOR YESTERDAY
-    print(f"📊 Extracting Yesterday's results ({yesterday}) for Discord...")
+    # Load your historical data
+    # Structure expected: {"Character Name": {"Date": "XP Gain"}}
+    logs = load_json(LOG_PATH, {})
     yesterday_results = []
-    for name, dates in logs.items():
-        if yesterday in dates:
-            val = int(dates[yesterday].replace(",", "").replace("+", ""))
-            if val > 0:
-                yesterday_results.append((name, val))
+
+    for name, history in logs.items():
+        # Check both date formats
+        for d_fmt in target_dates:
+            if d_fmt in history:
+                gain = parse_xp(history[d_fmt])
+                if gain >= 0:
+                    yesterday_results.append({"name": name, "gain": gain})
+                    break # Found it for this character
 
     if yesterday_results:
-        yesterday_results.sort(key=lambda x: x[1], reverse=True)
+        # Sort by highest gain
+        yesterday_results.sort(key=lambda x: x['gain'], reverse=True)
         
-        # Discord Embed logic
+        # Filter out 0 gains for the top list
+        top_gainers = [g for g in yesterday_results if g['gain'] > 0]
+        
+        if not top_gainers:
+            print("😴 Data found, but everyone gained 0 XP.")
+            return
+
+        # --- DISCORD EMBED ---
         fields = []
         medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-        max_xp = yesterday_results[0][1]
-        
-        for i, (name, val) in enumerate(yesterday_results[:5]):
-            pct = (val / max_xp) if max_xp > 0 else 0
+        max_xp = top_gainers[0]['gain']
+
+        for i, p in enumerate(top_gainers[:5]):
+            pct = (p['gain'] / max_xp) if max_xp > 0 else 0
             bar = "🟩" * round(pct * 10) + "⬛" * (10 - round(pct * 10))
             fields.append({
-                "name": f"{medals.get(i, '🔹')} **{name}**",
-                "value": f"`+{val:,} XP`\n{bar} `{int(pct*100)}%`"
+                "name": f"{medals.get(i, '🔹')} **{p['name']}**",
+                "value": f"`+{p['gain']:,} XP`\n{bar} `{int(pct*100)}%`",
+                "inline": False
             })
 
         payload = {
             "embeds": [{
                 "title": "🏆 Yesterday's XP Champions 🏆",
-                "description": f"🗓️ Results for: **{yesterday}**",
+                "description": f"🗓️ Results for: **{iso_yesterday}**",
                 "fields": fields,
                 "color": 0x2ecc71,
-                "footer": {"text": "Data sourced from xp_log.json"}
+                "footer": {"text": "Data extracted from local xp_log.json"}
             }]
         }
 
-        # Avoid double posting
+        # Post to Discord (with state check to avoid double-posting)
         state = load_json(STATE_PATH, {})
-        if state.get("daily_posted") != yesterday:
+        if state.get("daily_posted") != iso_yesterday:
             webhook = os.environ.get("DISCORD_WEBHOOK_URL")
             if webhook:
-                requests.post(webhook, json=payload)
-                state["daily_posted"] = yesterday
-                save_json(STATE_PATH, state)
-                print("🚀 Discord post sent!")
+                r = requests.post(webhook, json=payload)
+                if r.status_code in [200, 204]:
+                    state["daily_posted"] = iso_yesterday
+                    save_json(STATE_PATH, state)
+                    print(f"🚀 Discord post sent for {iso_yesterday}!")
+                else:
+                    print(f"❌ Discord error: {r.status_code}")
     else:
-        print(f"😴 No entries for {yesterday} found in log yet.")
+        print(f"❌ No entries for {target_dates[0]} or {target_dates[1]} found in {LOG_PATH.name}.")
+        # Debug: Print the first character's dates to see what's actually in there
+        if logs:
+            first_char = next(iter(logs))
+            available_dates = list(logs[first_char].keys())[:3]
+            print(f"💡 Found dates like {available_dates} for {first_char}. Check your format!")
 
 if __name__ == "__main__":
     main()
