@@ -19,7 +19,6 @@ TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
 POST_STATE_PATH = BASE_DIR / "post_state.json"
 TIMEZONE = "Europe/London"
 
-# NEW: Faking standard human browser requests
 HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
@@ -82,10 +81,18 @@ async def scrape_xp_tab9(char_name, session, target_date):
                 continue
 
             soup = BeautifulSoup(response.text, "html.parser")
-            table = soup.select_one("#tabs1 .newTable")
+            
+            # Universal Table Hunter
+            table = None
+            for t in soup.find_all("table"):
+                if "Exp change" in t.text or "Date" in t.text:
+                    table = t
+                    if len(t.find_all("tr")) > 5: # Make sure it's the big data table
+                        break
             
             if not table:
-                print(f"⚠️ {char_name}: Table missing from HTML.")
+                title = soup.title.string if soup.title else "No Title"
+                print(f"⚠️ {char_name}: Table missing. Page Title: '{title}'.")
                 return {}
 
             char_data = {}
@@ -98,6 +105,7 @@ async def scrape_xp_tab9(char_name, session, target_date):
                 print(f"✅ {char_name}: Found {target_date}")
                 return char_data
             else:
+                print(f"⚠️ {char_name}: Table loaded, but no XP data for {target_date} yet.")
                 return {}
 
         except Exception as e:
@@ -185,7 +193,6 @@ async def main():
     all_xp = load_json(JSON_PATH, {})
     
     try:
-        # CHANGED TO SAFARI TO TRY AND BYPASS DATACENTER BLOCK
         async with AsyncSession(impersonate="safari15_5") as session:
             for name in chars:
                 new_data = await scrape_xp_tab9(name, session, target_date)
