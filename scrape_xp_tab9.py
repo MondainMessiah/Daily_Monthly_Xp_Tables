@@ -5,104 +5,169 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-# --- SETTINGS ---
+# --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
-LOG_PATH = BASE_DIR / "xp_log.json"
-POST_STATE_PATH = BASE_DIR / "post_state.json"
+CHAR_FILE = BASE_DIR / "characters.txt"
+LOG_PATH = BASE_DIR / "xp_log.json"       # Historical Daily Gains
+TOTALS_PATH = BASE_DIR / "xp_totals.json" # Last known total XP
+STATE_PATH = BASE_DIR / "post_state.json"
+STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
-def get_yesterday_iso():
+def get_dates():
     tz = ZoneInfo(TIMEZONE)
-    # Target: 2026-03-20
-    return (datetime.now(tz) - timedelta(days=1)).strftime("%Y-%m-%d")
+    now = datetime.now(tz)
+    return {
+        "today": now.strftime("%Y-%m-%d"),
+        "yesterday": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "day_before": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
+        "is_monday": now.weekday() == 0,
+        "is_first": now.day == 1,
+        "obj": now
+    }
 
 def load_json(path):
-    """Safely loads JSON. Returns empty dict if file is missing."""
     if path.exists():
         try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"❌ Error reading {path.name}: {e}")
+            with open(path, "r") as f: return json.load(f)
+        except: pass
     return {}
 
-def save_state(date_str):
-    """Saves only the 'already posted' status to a separate file."""
-    state = {"last_posted": date_str}
-    with open(POST_STATE_PATH, "w") as f:
-        json.dump(state, f)
+def save_json(path, data):
+    with open(path, "w") as f: json.dump(data, f, indent=2)
 
-def parse_xp(val):
-    """Converts string '+1,234' to integer 1234."""
+# --- DATA PROCESSING ---
+def fetch_total_xp(name):
+    url = f"https://api.tibiadata.com/v4/character/{name.replace(' ', '%20')}"
     try:
-        return int(str(val).replace(",", "").replace("+", "").strip())
-    except:
-        return 0
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200:
+            return r.json().get("character", {}).get("character", {}).get("experience", 0)
+    except: pass
+    return 0
 
-# --- THE SAFE REPORTER ---
-def main():
-    yesterday = get_yesterday_iso()
-    print(f"📊 Checking logs for: {yesterday}")
+def get_ranking(logs, date_list):
+    """Calculates sums for a specific range of dates."""
+    rank = []
+    for name, history in logs.items():
+        total = 0
+        for d in date_list:
+            val = history.get(d, "0").replace(",", "").replace("+", "")
+            total += int(val)
+        rank.append((name, total))
+    return sorted(rank, key=lambda x: x[1], reverse=True)
 
-    # 1. LOAD DATA (Read Only)
-    logs = load_json(LOG_PATH)
-    if not logs:
-        print(f"⚠️ {LOG_PATH.name} is empty or missing. Nothing to post.")
-        return
-
-    # 2. EXTRACT YESTERDAY'S GAINS
-    results = []
-    for name, dates in logs.items():
-        if yesterday in dates:
-            val = parse_xp(dates[yesterday])
-            if val > 0:
-                results.append({"name": name, "xp": val})
-
-    if not results:
-        print(f"😴 No entries found for {yesterday} in your log.")
-        return
-
-    # 3. SORT & BUILD EMBED
-    results.sort(key=lambda x: x['xp'], reverse=True)
+# --- VISUAL DASHBOARD ---
+def send_discord_post(title, date_label, ranking, team_change=None):
+    if not ranking or ranking[0][1] <= 0: return
     
-    # Avoid double-posting
-    state = load_json(POST_STATE_PATH)
-    if state.get("last_posted") == yesterday:
-        print(f"⏩ Already posted results for {yesterday}. Skipping.")
-        return
-
-    fields = []
+    max_xp = ranking[0][1]
+    total_team_xp = sum(v for n, v in ranking)
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-    max_xp = results[0]['xp']
+    fields = []
 
-    for i, p in enumerate(results[:5]):
-        pct = (p['xp'] / max_xp) if max_xp > 0 else 0
-        bar = "🟩" * round(pct * 10) + "⬛" * (10 - round(pct * 10))
+    # Top 3 with Full Bars
+    for i, (name, xp) in enumerate(ranking[:3]):
+        pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
+        bar_count = round(pct / 10)
+        bar = "🟩" * bar_count + "⬛" * (10 - bar_count)
+        
+        streak_str = ""
+        if "Daily" in title and i == 0:
+            streaks = load_json(STREAKS_PATH)
+            if streaks.get("last") == name: streaks["count"] += 1
+            else: streaks["last"], streaks["count"] = name, 1
+            save_json(STREAKS_PATH, streaks)
+            streak_str = f" 🔥 {streaks['count']}" if streaks['count'] < 5 else f" 👑 {streaks['count']}"
+
         fields.append({
-            "name": f"{medals.get(i, '🔹')} **{p['name']}**",
-            "value": f"`+{p['xp']:,} XP`\n{bar} `{int(pct*100)}%`",
+            "name": f"{medals[i]} **{name}**{streak_str}",
+            "value": f"**+{xp:,} XP**\n{bar} `{pct}%`",
             "inline": False
         })
 
+    # Others List
+    others = [f"**{idx}. {n}** (`+{v:,} XP`)" for idx, (n, v) in enumerate(ranking[3:5], 4) if v > 0]
+    if others:
+        fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
+
+    footer = f"Team Total: {total_team_xp:,} XP"
+    if team_change: footer += f" ({team_change} vs last daily)"
+    footer += "\n⭐ = New PB | 🔥 = 1-4 Streak | 👑 = 5+ Streak"
+
     payload = {
         "embeds": [{
-            "title": "🏆 Yesterday's XP Champions 🏆",
-            "description": f"🗓️ Results for: **{yesterday}**",
+            "title": f"🏆 {title} 🏆",
+            "description": f"🗓️ Date: **{date_label}**",
             "fields": fields,
             "color": 0x2ecc71,
-            "footer": {"text": "Verified Daily Log Results"}
+            "footer": {"text": footer}
         }]
     }
+    requests.post(os.environ.get("DISCORD_WEBHOOK_URL"), json=payload)
 
-    # 4. SEND TO DISCORD
-    webhook = os.environ.get("DISCORD_WEBHOOK_URL")
-    if webhook:
-        r = requests.post(webhook, json=payload)
-        if r.status_code in [200, 204]:
-            save_state(yesterday)
-            print(f"🚀 Success! Yesterday's leaderboard sent to Discord.")
-        else:
-            print(f"❌ Discord error: {r.status_code}")
+# --- MAIN ENGINE ---
+def main():
+    dates = get_dates()
+    logs = load_json(LOG_PATH)
+    totals = load_json(TOTALS_PATH)
+    state = load_json(STATE_PATH)
+    
+    with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
+
+    # 1. FETCH & UPDATE LOGS (Safe Append)
+    print(f"📡 Updating API Totals for {dates['today']}...")
+    for name in chars:
+        current_total = fetch_total_xp(name)
+        if current_total == 0: continue
+        
+        prev_total = totals.get(name, 0)
+        if prev_total > 0:
+            gain = current_total - prev_total
+            if gain >= 0:
+                if name not in logs: logs[name] = {}
+                logs[name][dates["today"]] = f"+{gain:,}"
+        
+        totals[name] = current_total
+    
+    save_json(TOTALS_PATH, totals)
+    save_json(LOG_PATH, logs)
+
+    # 2. DAILY POST (Yesterday)
+    yest = dates["yesterday"]
+    if state.get("last_daily") != yest:
+        rank_y = get_ranking(logs, [yest])
+        if rank_y:
+            # Team Change Math
+            team_y = sum(v for n, v in rank_y)
+            rank_db = get_ranking(logs, [dates["day_before"]])
+            team_db = sum(v for n, v in rank_db)
+            change = f"{((team_y - team_db)/team_db)*100:+.1f}%" if team_db > 0 else "0%"
+            
+            send_discord_post("Daily Champion", yest, rank_y, change)
+            state["last_daily"] = yest
+            save_json(STATE_PATH, state)
+            print(f"🚀 Daily Post Sent for {yest}!")
+
+    # 3. WEEKLY POST (Mondays)
+    if dates["is_monday"] and state.get("last_weekly") != yest:
+        last_7 = [(dates["dt"] - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 8)]
+        rank_w = get_ranking(logs, last_7)
+        send_discord_post("Weekly Champion", f"Week ending {yest}", rank_w)
+        state["last_weekly"] = yest
+        save_json(STATE_PATH, state)
+        print("🚀 Weekly Post Sent!")
+
+    # 4. MONTHLY POST (1st of the Month)
+    if dates["is_first"] and state.get("last_monthly") != yest:
+        first_last_month = (dates["dt"].replace(day=1) - timedelta(days=1)).replace(day=1)
+        month_str = first_last_month.strftime("%Y-%m")
+        month_dates = [d for d in next(iter(logs.values())).keys() if d.startswith(month_str)]
+        rank_m = get_ranking(logs, month_dates)
+        send_discord_post("Monthly Champion", first_last_month.strftime("%B %Y"), rank_m)
+        state["last_monthly"] = yest
+        save_json(STATE_PATH, state)
+        print("🚀 Monthly Post Sent!")
 
 if __name__ == "__main__":
     main()
