@@ -23,7 +23,7 @@ def get_target_info():
     dt = datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)
     return {
         "iso": dt.strftime("%Y-%m-%d"),
-        "euro": dt.strftime("%d/%m/%Y"), # 20/03/2026
+        "euro": dt.strftime("%d/%m/%Y"),
         "dt_obj": dt
     }
 
@@ -48,7 +48,7 @@ def mark_posted(category, date_str):
     state[category] = date_str
     save_json(POST_STATE_PATH, state)
 
-# --- THE DATA HUNTER ---
+# --- THE DEEP JSON EXTRACTOR ---
 async def scrape_tibiarise(char_name, session, target):
     slug = char_name.replace(' ', '%20')
     url = f"https://tibiarise.app/en/character/{slug}"
@@ -57,50 +57,46 @@ async def scrape_tibiarise(char_name, session, target):
 
     try:
         response = await session.get(url, timeout=15)
-        if response.status_code != 200:
-            print(f"⚠️ {char_name}: HTTP {response.status_code}")
-            return {}
+        if response.status_code != 200: return {}
 
-        # RECON: Look for the hidden __NEXT_DATA__ JSON
         soup = BeautifulSoup(response.text, "html.parser")
         script_tag = soup.find("script", id="__NEXT_DATA__")
         
-        # If we can't find the JSON, we'll try a raw text search as a fallback
-        data_source = script_tag.string if script_tag else response.text
-        
-        # We search for the date, then look for the "exp" or "xp" number near it
-        # This regex looks for the date followed by "experienceGained":NUMBER
-        pattern = rf'"{euro_date}".*?experienceGained":(\d+)'
-        match = re.search(pattern, data_source)
-        
-        if not match:
-            # Try ISO format search (2026-03-20)
-            pattern = rf'"{iso_key}".*?experienceGained":(\d+)'
-            match = re.search(pattern, data_source)
+        if script_tag:
+            raw_content = script_tag.string
+            
+            # DIAGNOSTIC: If it fails, we want to see what the JSON structure looks like
+            # We search for the date and capture 200 characters around it
+            for d_str in [euro_date, iso_key]:
+                idx = raw_content.find(d_str)
+                if idx != -1:
+                    # Found the date! Now let's grab the numbers nearby.
+                    # We look for the closest "number": value
+                    context = raw_content[max(0, idx-150):min(len(raw_content), idx+150)]
+                    
+                    # Search for numbers (XP gains are usually long digits or 0)
+                    # We look for patterns like "experienceGained":0 or "xp":1234
+                    matches = re.findall(r'[:"](\d+)["},]', context)
+                    if matches:
+                        # Usually, the XP gain is one of the first numbers near the date.
+                        # We pick the one that is likely NOT the level (780-800)
+                        for m in matches:
+                            val = int(m)
+                            if val == 0 or val > 10000: # 0 is valid, big numbers are XP
+                                formatted_xp = f"+{val:,}"
+                                print(f"✅ {char_name}: Found {formatted_xp} XP (Context Match)")
+                                return {iso_key: formatted_xp}
+            
+            # If we still haven't found it, print the context for debugging
+            print(f"⚠️ {char_name}: Date found but couldn't identify XP number.")
+        else:
+            print(f"⚠️ {char_name}: Could not find __NEXT_DATA__ script.")
 
-        if match:
-            xp_val = int(match.group(1))
-            formatted_xp = f"+{xp_val:,}"
-            print(f"✅ {char_name}: Found {formatted_xp} XP")
-            return {iso_key: formatted_xp}
-
-        # FINAL FALLBACK: Look for the date in the HTML table structure directly
-        for tr in soup.find_all("tr"):
-            cells = tr.find_all("td")
-            if len(cells) >= 2 and euro_date in cells[0].get_text():
-                # Column 1 is usually the 'XP Gained'
-                val_text = cells[1].get_text(strip=True).replace(",", "").replace("+", "")
-                if val_text.isdigit():
-                    formatted_xp = f"+{int(val_text):,}"
-                    print(f"✅ {char_name}: Found via Table -> {formatted_xp}")
-                    return {iso_key: formatted_xp}
-
-        print(f"⚠️ {char_name}: No data for {euro_date} found in JSON or Table.")
     except Exception as e:
         print(f"⚠️ {char_name}: Error - {str(e)}")
     return {}
 
-# --- EMBED & RANKING LOGIC (Same as your stable version) ---
+# --- LOGIC & RANKING ---
 def check_pb(category, name, xp):
     pbs = load_json(PB_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
     cat_pbs = pbs.setdefault(category, {})
@@ -139,6 +135,7 @@ def create_fields(rank, category, badge):
 async def main():
     target = get_target_info()
     iso = target["iso"]
+    today = datetime.now(ZoneInfo(TIMEZONE))
     
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     all_xp = load_json(JSON_PATH, {})
@@ -154,26 +151,21 @@ async def main():
     
     rank = sorted([(n, int(d[iso].replace(",","").replace("+",""))) for n, d in all_xp.items() if iso in d], key=lambda x: x[1], reverse=True)
     
-    # Check if ANYONE has data (even 0)
-    if rank:
-        # We only post to Discord if at least one player gained XP (> 0)
-        if any(r[1] > 0 for r in rank):
-            badge = update_streak("daily", rank[0][0])
-            post_to_discord({
-                "embeds": [{
-                    "title": "🏆 Daily Champion 🏆",
-                    "description": f"🗓️ Date: {iso}",
-                    "fields": create_fields([r for r in rank if r[1] > 0], "daily", badge),
-                    "color": 0x2ecc71,
-                    "footer": {"text": "TibiaRise Data • ⭐=PB 🔥=Streak 👑=Crown"}
-                }]
-            })
-            mark_posted("daily", iso)
-            print("✅ Discord Post Sent!")
-        else:
-            print("😴 Data found, but everyone had 0 XP gain. No post sent.")
+    if rank and any(r[1] > 0 for r in rank):
+        badge = update_streak("daily", rank[0][0])
+        post_to_discord({
+            "embeds": [{
+                "title": "🏆 Daily Champion 🏆",
+                "description": f"🗓️ Date: {iso}",
+                "fields": create_fields([r for r in rank if r[1] > 0], "daily", badge),
+                "color": 0x2ecc71,
+                "footer": {"text": "TibiaRise Data • ⭐=PB 🔥=Streak 👑=Crown"}
+            }]
+        })
+        mark_posted("daily", iso)
+        print("✅ Discord Post Sent!")
     else:
-        print("❌ Could not extract data for any characters.")
+        print("😴 No significant XP gains found.")
 
 if __name__ == "__main__":
     asyncio.run(main())
