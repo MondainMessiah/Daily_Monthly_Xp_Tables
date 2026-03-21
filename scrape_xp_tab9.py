@@ -1,9 +1,11 @@
 import asyncio
 from curl_cffi.requests import AsyncSession
 
-async def test_new_site():
-    print("🚀 Testing tibia-statistic.com bypass...")
-    url = "https://www.tibia-statistic.com/"
+async def test_tibiarise():
+    print("🚀 Testing tibiarise.app bypass...")
+    
+    # Testing a character page directly (using a random placeholder name)
+    url = "https://tibiarise.app/en"
     
     HEADERS = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
@@ -17,8 +19,10 @@ async def test_new_site():
             print(f"📡 Status Code: {response.status_code}")
             
             if response.status_code == 200:
-                print("✅ SUCCESS! Cloudflare let us through! We can build a scraper for this site.")
-            elif response.status_code in [403, 429]:
+                print("✅ SUCCESS! Cloudflare let us through! TibiaRise is open for business.")
+                # Print a tiny snippet of the HTML to make sure it's the real site
+                print(f"📄 HTML Snippet: {response.text[:200].strip()}...")
+            elif response.status_code in [403, 429, 503]:
                 print(f"❌ FAILED: HTTP {response.status_code}. Cloudflare blocked GitHub's Datacenter IP again.")
             else:
                 print(f"⚠️ Unknown response: {response.status_code}")
@@ -27,4 +31,4 @@ async def test_new_site():
         print(f"❌ CRITICAL ERROR: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(test_new_site())
+    asyncio.run(test_tibiarise())
