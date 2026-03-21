@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
+from playwright.async_api import async_playwright
 import requests
 
 # --- SETTINGS & PATHING ---
@@ -54,53 +54,46 @@ def increment_attempts(date_str):
     save_json(POST_STATE_PATH, state)
     return count
 
-# --- TIBIARISE SCRAPER ---
-async def scrape_tibiarise(char_name, session, target_date):
-    # TibiaRise usually uses spaces or %20 in URLs
+# --- TIBIARISE PLAYWRIGHT SCRAPER ---
+async def scrape_tibiarise(char_name, page, target_date):
     formatted_name = char_name.replace(' ', '%20')
+    url = f"https://tibiarise.app/en/characters/{formatted_name}"
     
-    # FIXED: Using /characters/ (plural)
-    urls_to_try = [
-        f"https://tibiarise.app/characters/{formatted_name}",
-        f"https://tibiarise.app/en/characters/{formatted_name}"
-    ]
-    
-    for url in urls_to_try:
-        try:
-            response = await session.get(url, timeout=15)
-            if response.status_code != 200:
-                continue 
-
-            html = response.text
-            soup = BeautifulSoup(html, "html.parser")
-            
-            # Diagnostic Check: Is the date even on this page?
-            if target_date not in html:
-                continue
-
-            # Universal Hunter for Tabular Data
-            for tr in soup.find_all("tr"):
-                row_text = tr.get_text(separator=" ", strip=True)
-                if target_date in row_text:
-                    tds = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
-                    for td in tds:
-                        clean_val = td.replace(",", "").replace(" ", "").replace("+", "").strip()
-                        # Looking for the XP gain (must be a number, usually has a + or is a massive number)
-                        if clean_val.isdigit() and ("+" in td or int(clean_val) > 1000):
-                            formatted_xp = f"+{int(clean_val):,}"
-                            print(f"✅ {char_name}: Found {target_date} ({formatted_xp})")
-                            return {target_date: formatted_xp}
-            
-            # If we get here, the date is on the page, but NOT in a standard <tr> table!
-            idx = html.find(target_date)
-            context = html[max(0, idx-50):min(len(html), idx+150)]
-            print(f"⚠️ {char_name}: Date found, but layout is unknown. HTML Context:\n{context}")
+    try:
+        # Load the page and wait for the network to settle (meaning JS has fetched the data)
+        await page.goto(url, wait_until="networkidle", timeout=30000)
+        
+        # Give React an extra 3 seconds to actually draw the table on the screen
+        await asyncio.sleep(3)
+        
+        html = await page.content()
+        soup = BeautifulSoup(html, "html.parser")
+        
+        if target_date not in html:
+            print(f"⚠️ {char_name}: Date {target_date} not found on the rendered page.")
             return {}
 
-        except Exception as e:
-            print(f"⚠️ {char_name}: ERROR - {str(e)}")
-            
-    print(f"⚠️ {char_name}: Could not find XP data for {target_date}.")
+        # Universal Hunter for Tabular Data
+        for tr in soup.find_all("tr"):
+            row_text = tr.get_text(separator=" ", strip=True)
+            if target_date in row_text:
+                tds = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+                for td in tds:
+                    clean_val = td.replace(",", "").replace(" ", "").replace("+", "").strip()
+                    if clean_val.isdigit() and ("+" in td or int(clean_val) > 1000):
+                        formatted_xp = f"+{int(clean_val):,}"
+                        print(f"✅ {char_name}: Found {target_date} ({formatted_xp})")
+                        return {target_date: formatted_xp}
+        
+        # Diagnostic dump if it's not in a TR
+        idx = html.find(target_date)
+        context = html[max(0, idx-50):min(len(html), idx+150)]
+        print(f"⚠️ {char_name}: Date found, but layout is unknown. HTML Context:\n{context}")
+        return {}
+
+    except Exception as e:
+        print(f"⚠️ {char_name}: ERROR - {str(e)}")
+        
     return {}
 
 # --- LOGIC & FORMATTING FUNCTIONS ---
@@ -182,16 +175,20 @@ async def main():
     
     all_xp = load_json(JSON_PATH, {})
     
-    # We impersonate Chrome to blend in nicely
-    async with AsyncSession(impersonate="chrome120") as session:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        
         for name in chars:
-            new_data = await scrape_tibiarise(name, session, target_date)
+            new_data = await scrape_tibiarise(name, page, target_date)
             if new_data:
                 if name not in all_xp: all_xp[name] = {}
                 all_xp[name].update(new_data)
             
-            # Tiny delay to be polite to the TibiaRise servers
-            await asyncio.sleep(1)
+            # 2 second pause between checking characters
+            await asyncio.sleep(2)
+            
+        await browser.close()
             
     save_json(JSON_PATH, all_xp)
     
