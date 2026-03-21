@@ -1,4 +1,3 @@
-playwright
 beautifulsoup4
 requests
-playwright-stealth
+curl_cffi
