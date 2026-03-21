@@ -2,6 +2,7 @@ name: Tibia XP Tracker
 
 on:
   schedule:
+    # Runs at 10:30, 11:30, 12:30, 13:30, and 14:30 UTC. (Exactly 5 attempts)
     - cron: '30 10-14 * * *'
   workflow_dispatch: 
 
@@ -21,7 +22,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install beautifulsoup4 requests curl_cffi
+          pip install -r requirements.txt
 
       - name: Run XP Scraper Script
         env:
