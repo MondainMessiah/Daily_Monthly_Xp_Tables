@@ -24,7 +24,7 @@ def get_target_info():
     return {
         "iso": dt.strftime("%Y-%m-%d"),
         "euro": dt.strftime("%d/%m/%Y"), # 20/03/2026
-        "dt_obj": dt
+        "short_year": dt.strftime("%d/%m/%y") # 20/03/26
     }
 
 def load_json(path, fallback):
@@ -48,42 +48,45 @@ def mark_posted(category, date_str):
     state[category] = date_str
     save_json(POST_STATE_PATH, state)
 
-# --- THE TABLE TANK ---
+# --- THE WIRE DECODER ---
 async def scrape_tibiarise(char_name, session, target):
     slug = char_name.replace(' ', '%20')
     url = f"https://tibiarise.app/en/character/{slug}"
-    iso_key = target["iso"]
-    euro_date = target["euro"]
-
+    
     try:
         response = await session.get(url, timeout=15)
-        if response.status_code != 200: return {}
+        if response.status_code != 200:
+            print(f"⚠️ {char_name}: HTTP {response.status_code}")
+            return {}
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        full_body = response.text
         
-        # We find every table row (tr) on the page
-        for tr in soup.find_all("tr"):
-            cells = tr.find_all(["td", "th"])
-            if len(cells) < 2: continue
+        # We search the ENTIRE page source (including hidden scripts)
+        # We look for the date, then skip the Level (790) and find the Gain.
+        # Based on your screenshot: Date -> XP Gain -> Level
+        # In the code it usually looks like: "20/03/2026", "0", "790"
+        
+        found_xp = None
+        # Try both European and ISO date formats
+        for date_str in [target["euro"], target["iso"], target["short_year"]]:
+            # Regex: Find the date, then look for the next two numeric values
+            # pattern: date_str followed by any characters, then a number (XP), then maybe another number (Level)
+            # We use [^0-9\-+]* to skip over quotes, commas, and labels
+            pattern = rf'"{date_str}"[^0-9\-+]*?([\-+]?[0-9,]+)'
+            match = re.search(pattern, full_body)
             
-            row_text = tr.get_text(" ", strip=True)
-            
-            # Match our date (20/03/2026)
-            if euro_date in row_text or iso_key in row_text:
-                # XP Gain is usually the cell immediately following the date
-                # We search all cells in this row for a number that isn't the date
-                for cell in cells:
-                    val_raw = cell.get_text(strip=True).replace(",", "").replace("+", "")
-                    if val_raw.isdigit():
-                        val = int(val_raw)
-                        # Filter: Experience gains are usually 0 or > 10,000
-                        # This ignores 'Level' (e.g. 790) or 'Rank' (e.g. 1)
-                        if val == 0 or val > 5000:
-                            formatted_xp = f"+{val:,}"
-                            print(f"✅ {char_name}: Found {formatted_xp} XP")
-                            return {iso_key: formatted_xp}
+            if match:
+                raw_val = match.group(1).replace(",", "")
+                found_xp = int(raw_val)
+                break
 
-        print(f"⚠️ {char_name}: Date {euro_date} not found in any table row.")
+        if found_xp is not None:
+            formatted_xp = f"+{found_xp:,}" if found_xp >= 0 else f"{found_xp:,}"
+            print(f"✅ {char_name}: Found {formatted_xp} XP for {target['euro']}")
+            return {target["iso"]: formatted_xp}
+            
+        print(f"⚠️ {char_name}: Date {target['euro']} was not found in the page source.")
+        
     except Exception as e:
         print(f"⚠️ {char_name}: Error - {str(e)}")
     return {}
@@ -140,23 +143,28 @@ async def main():
             
     save_json(JSON_PATH, all_xp)
     
+    # Process Ranking
     rank = sorted([(n, int(d[iso].replace(",","").replace("+",""))) for n, d in all_xp.items() if iso in d], key=lambda x: x[1], reverse=True)
     
-    if rank and any(r[1] > 0 for r in rank):
-        badge = update_streak("daily", rank[0][0])
-        post_to_discord({
-            "embeds": [{
-                "title": "🏆 Daily Champion 🏆",
-                "description": f"🗓️ Date: {iso}",
-                "fields": create_fields([r for r in rank if r[1] > 0], "daily", badge),
-                "color": 0x2ecc71,
-                "footer": {"text": "TibiaRise Data • ⭐=PB 🔥=Streak 👑=Crown"}
-            }]
-        })
-        mark_posted("daily", iso)
-        print("✅ Discord Post Sent!")
+    if rank:
+        # Check if anyone actually GAINED xp (to avoid 0-xp-posts)
+        if any(r[1] > 0 for r in rank):
+            badge = update_streak("daily", rank[0][0])
+            post_to_discord({
+                "embeds": [{
+                    "title": "🏆 Daily Champion 🏆",
+                    "description": f"🗓️ Date: {target['euro']}",
+                    "fields": create_fields([r for r in rank if r[1] > 0], "daily", badge),
+                    "color": 0x2ecc71,
+                    "footer": {"text": "TibiaRise Data • ⭐=PB 🔥=Streak 👑=Crown"}
+                }]
+            })
+            mark_posted("daily", iso)
+            print("✅ Discord Post Sent!")
+        else:
+            print("😴 Everyone found, but gains were 0. No post sent.")
     else:
-        print("😴 No significant XP gains found.")
+        print("❌ Could not extract data for any characters.")
 
 if __name__ == "__main__":
     asyncio.run(main())
