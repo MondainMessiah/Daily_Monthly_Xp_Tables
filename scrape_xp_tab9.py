@@ -47,45 +47,46 @@ def mark_posted(category, date_str):
     state[category] = date_str
     save_json(POST_STATE_PATH, state)
 
-# --- TIBIARISE SCRAPER ---
+# --- TIBIARISE MASTER SCRAPER ---
 async def scrape_tibiarise(char_name, page, site_date):
     formatted_name = char_name.replace(' ', '%20')
     url = f"https://tibiarise.app/en/characters/{formatted_name}"
     iso_key, _ = get_target_date_info()
     
     try:
-        print(f"🔍 Checking: {char_name}...")
-        # Increase timeout and wait for the page to be fully "idle"
-        await page.goto(url, wait_until="networkidle", timeout=60000)
+        print(f"🔍 Loading {char_name}...")
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         
-        # New Strategy: Wait for any text related to experience to appear
+        # WAIT FOR DATA: Wait until the specific date text appears in the table
         try:
-            await page.wait_for_selector("text=Experience", timeout=20000)
+            await page.wait_for_selector(f"text={site_date}", timeout=25000)
         except:
-            print(f"⚠️ {char_name}: Page content (Experience) didn't load.")
+            print(f"⚠️ {char_name}: Date {site_date} never appeared. Site might be slow.")
             return {}
 
-        await asyncio.sleep(3) # Final breath for the UI to settle
+        await asyncio.sleep(2) 
         
-        soup = BeautifulSoup(await page.content(), "html.parser")
-        
-        # Search for the row containing the target date
-        found_data = False
-        for row in soup.find_all("tr"):
-            tds = [td.get_text(strip=True) for td in row.find_all(["td", "th"])]
-            if len(tds) < 2: continue
-            
-            if site_date in tds[0]:
-                raw_xp = tds[1].replace(",", "").replace("+", "").replace(" ", "").strip()
-                if raw_xp.isdigit() or (raw_xp.startswith('-') and raw_xp[1:].isdigit()):
-                    val = int(raw_xp)
-                    formatted_xp = f"+{val:,}" if val >= 0 else f"{val:,}"
-                    print(f"✅ {char_name}: Found {tds[0]} -> {formatted_xp} XP")
-                    return {iso_key: formatted_xp}
+        # Get all table rows
+        rows = await page.locator("tr").all()
+        for row in rows:
+            row_text = await row.inner_text()
+            if site_date in row_text:
+                # Get all cells in this specific row
+                cells = await row.locator("td").all_inner_texts()
+                
+                if len(cells) >= 2:
+                    # Column 0 = Date, Column 1 = XP Gained
+                    raw_xp = cells[1].replace(",", "").replace("+", "").replace(" ", "").strip()
+                    
+                    if raw_xp.isdigit():
+                        val = int(raw_xp)
+                        formatted_xp = f"+{val:,}"
+                        print(f"✅ {char_name}: Found {site_date} -> {formatted_xp} XP")
+                        return {iso_key: formatted_xp}
                         
-        print(f"⚠️ {char_name}: Date {site_date} not found in the loaded table.")
+        print(f"⚠️ {char_name}: Row for {site_date} found but XP column was empty.")
     except Exception as e:
-        print(f"⚠️ {char_name}: Error during browser run - {str(e)}")
+        print(f"⚠️ {char_name}: Error - {str(e)}")
     return {}
 
 # --- FORMATTING LOGIC ---
@@ -149,18 +150,17 @@ async def main():
         print(f"⏩ Already posted for {iso_key}. Skipping.")
         return 
 
-    print(f"🎯 Target: {iso_key} (Searching site for: {site_date})")
+    print(f"🎯 Target: {iso_key} (Searching for: {site_date})")
     
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     all_xp = load_json(JSON_PATH, {})
     
-    found_any_new_data = False
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # Using a very modern user-agent
+        # Use a high-quality human profile to avoid bot detection
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={'width': 1280, 'height': 800}
         )
         page = await context.new_page()
         
@@ -169,26 +169,20 @@ async def main():
             if new_data:
                 if name not in all_xp: all_xp[name] = {}
                 all_xp[name].update(new_data)
-                found_any_new_data = True
             await asyncio.sleep(2)
         await browser.close()
             
     save_json(JSON_PATH, all_xp)
     
-    if not found_any_new_data:
-        print("❌ Scraper failed to find any data for any character. No post possible.")
-        return
-
-    # Process Daily Ranking
+    # Check if we have any data for the target date
     rank_d = []
     for n, d in all_xp.items():
         if iso_key in d:
             val = int(d[iso_key].replace(",","").replace("+",""))
             rank_d.append((n, val))
     
-    rank_d.sort(key=lambda x: x[1], reverse=True)
-
     if any(r[1] > 0 for r in rank_d):
+        rank_d.sort(key=lambda x: x[1], reverse=True)
         badge, announce = update_streak("daily", rank_d[0][0])
         footer, color = calculate_growth("daily", sum(r[1] for r in rank_d))
         post_to_discord({
@@ -201,9 +195,9 @@ async def main():
             }]
         })
         mark_posted("daily", iso_key)
-        print("✅ Daily embed posted!")
+        print("✅ Daily leaderboard posted!")
     else:
-        print("😴 Found data, but everyone had 0 XP gain. Post skipped to keep Discord clean.")
+        print("😴 Everyone had 0 XP gain or data is still missing. No post sent.")
 
 if __name__ == "__main__":
     asyncio.run(main())
