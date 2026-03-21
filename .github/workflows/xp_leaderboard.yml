@@ -22,7 +22,8 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright beautifulsoup4 requests playwright-stealth
+          # CHANGED: Swapped to tf-playwright-stealth to fix the Import Error
+          pip install playwright beautifulsoup4 requests tf-playwright-stealth
           
       - name: Install Playwright Browsers & Linux Dependencies
         run: playwright install chromium --with-deps
