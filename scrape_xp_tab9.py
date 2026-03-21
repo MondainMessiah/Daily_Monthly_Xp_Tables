@@ -23,7 +23,7 @@ def get_target_info():
     dt = datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)
     return {
         "iso": dt.strftime("%Y-%m-%d"),
-        "euro": dt.strftime("%d/%m/%Y"),
+        "euro": dt.strftime("%d/%m/%Y"), # 20/03/2026
         "dt_obj": dt
     }
 
@@ -43,51 +43,64 @@ def post_to_discord(payload):
         try: requests.post(url, json=payload, timeout=10)
         except: pass
 
-def has_posted(category, date_str):
-    state = load_json(POST_STATE_PATH, {})
-    return state.get(category) == date_str
-
 def mark_posted(category, date_str):
     state = load_json(POST_STATE_PATH, {})
     state[category] = date_str
     save_json(POST_STATE_PATH, state)
 
-# --- THE DEEP JSON EXTRACTOR ---
+# --- THE DATA HUNTER ---
 async def scrape_tibiarise(char_name, session, target):
     slug = char_name.replace(' ', '%20')
     url = f"https://tibiarise.app/en/character/{slug}"
-    
+    iso_key = target["iso"]
+    euro_date = target["euro"]
+
     try:
         response = await session.get(url, timeout=15)
-        if response.status_code != 200: return {}
+        if response.status_code != 200:
+            print(f"⚠️ {char_name}: HTTP {response.status_code}")
+            return {}
 
+        # RECON: Look for the hidden __NEXT_DATA__ JSON
         soup = BeautifulSoup(response.text, "html.parser")
-        script = soup.find("script", id="__NEXT_DATA__")
+        script_tag = soup.find("script", id="__NEXT_DATA__")
         
-        raw_content = script.string if script else response.text
+        # If we can't find the JSON, we'll try a raw text search as a fallback
+        data_source = script_tag.string if script_tag else response.text
         
-        # SEARCH STRATEGY: Find the date string, then find the FIRST number that follows it
-        # This is the most "Universal" way to scrape Next.js data without knowing the exact keys
-        for date_str in [target["euro"], target["iso"]]:
-            # Regex: find date_str, then skip non-digits, then capture the digits
-            pattern = rf'"{date_str}".*?[:"](\d+)'
-            match = re.search(pattern, raw_content)
-            
-            if match:
-                val = int(match.group(1))
-                # TibiaRise often puts the 'Total XP' after the 'Gain'. 
-                # If we accidentally grabbed a 8-billion number, we need the NEXT one.
-                # But usually, the Gain comes first in the JSON object.
-                formatted_xp = f"+{val:,}"
-                print(f"✅ {char_name}: Found {val:,} XP for {date_str}")
-                return {target["iso"]: formatted_xp}
-                
-        print(f"⚠️ {char_name}: Date not found in the site data yet.")
+        # We search for the date, then look for the "exp" or "xp" number near it
+        # This regex looks for the date followed by "experienceGained":NUMBER
+        pattern = rf'"{euro_date}".*?experienceGained":(\d+)'
+        match = re.search(pattern, data_source)
+        
+        if not match:
+            # Try ISO format search (2026-03-20)
+            pattern = rf'"{iso_key}".*?experienceGained":(\d+)'
+            match = re.search(pattern, data_source)
+
+        if match:
+            xp_val = int(match.group(1))
+            formatted_xp = f"+{xp_val:,}"
+            print(f"✅ {char_name}: Found {formatted_xp} XP")
+            return {iso_key: formatted_xp}
+
+        # FINAL FALLBACK: Look for the date in the HTML table structure directly
+        for tr in soup.find_all("tr"):
+            cells = tr.find_all("td")
+            if len(cells) >= 2 and euro_date in cells[0].get_text():
+                # Column 1 is usually the 'XP Gained'
+                val_text = cells[1].get_text(strip=True).replace(",", "").replace("+", "")
+                if val_text.isdigit():
+                    formatted_xp = f"+{int(val_text):,}"
+                    print(f"✅ {char_name}: Found via Table -> {formatted_xp}")
+                    return {iso_key: formatted_xp}
+
+        print(f"⚠️ {char_name}: No data for {euro_date} found in JSON or Table.")
     except Exception as e:
         print(f"⚠️ {char_name}: Error - {str(e)}")
     return {}
 
-# --- LOGIC & RANKING ---
+# --- EMBED & RANKING LOGIC (Same as your stable version) ---
 def check_pb(category, name, xp):
     pbs = load_json(PB_PATH, {"daily": {}, "weekly": {}, "monthly": {}})
     cat_pbs = pbs.setdefault(category, {})
@@ -126,17 +139,7 @@ def create_fields(rank, category, badge):
 async def main():
     target = get_target_info()
     iso = target["iso"]
-    today = datetime.now(ZoneInfo(TIMEZONE))
     
-    # Flags for what to post
-    do_daily = not has_posted("daily", iso)
-    do_weekly = (today.weekday() == 0) and not has_posted("weekly", iso)
-    do_monthly = (today.day == 1) and not has_posted("monthly", iso)
-
-    if not (do_daily or do_weekly or do_monthly):
-        print(f"⏩ Already posted everything for {iso}. Exiting.")
-        return
-
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     all_xp = load_json(JSON_PATH, {})
     
@@ -149,34 +152,28 @@ async def main():
             
     save_json(JSON_PATH, all_xp)
     
-    # Process Daily
-    if do_daily:
-        rank_d = sorted([(n, int(d[iso].replace(",","").replace("+",""))) for n, d in all_xp.items() if iso in d], key=lambda x: x[1], reverse=True)
-        rank_d = [r for r in rank_d if r[1] > 0]
-        if rank_d:
-            badge = update_streak("daily", rank_d[0][0])
-            post_to_discord({"embeds": [{"title": "🏆 Daily Champion 🏆", "description": f"🗓️ Date: {iso}", "fields": create_fields(rank_d, "daily", badge), "color": 0x2ecc71, "footer": {"text": "TibiaRise Data • ⭐=PB 🔥=Streak 👑=Crown"}}]})
+    rank = sorted([(n, int(d[iso].replace(",","").replace("+",""))) for n, d in all_xp.items() if iso in d], key=lambda x: x[1], reverse=True)
+    
+    # Check if ANYONE has data (even 0)
+    if rank:
+        # We only post to Discord if at least one player gained XP (> 0)
+        if any(r[1] > 0 for r in rank):
+            badge = update_streak("daily", rank[0][0])
+            post_to_discord({
+                "embeds": [{
+                    "title": "🏆 Daily Champion 🏆",
+                    "description": f"🗓️ Date: {iso}",
+                    "fields": create_fields([r for r in rank if r[1] > 0], "daily", badge),
+                    "color": 0x2ecc71,
+                    "footer": {"text": "TibiaRise Data • ⭐=PB 🔥=Streak 👑=Crown"}
+                }]
+            })
             mark_posted("daily", iso)
-
-    # Process Weekly (Every Monday)
-    if do_weekly and has_posted("daily", iso):
-        start = (target["dt_obj"] - timedelta(days=6)).strftime("%Y-%m-%d")
-        rank_w = sorted([(n, sum(int(v.replace(",","").replace("+","")) for d, v in dates.items() if start <= d <= iso)) for n, dates in all_xp.items()], key=lambda x: x[1], reverse=True)
-        rank_w = [r for r in rank_w if r[1] > 0]
-        if rank_w:
-            badge = update_streak("weekly", rank_w[0][0])
-            post_to_discord({"embeds": [{"title": "🏆 Weekly Champion 🏆", "description": f"🗓️ Week ending {iso}", "fields": create_fields(rank_w, "weekly", badge), "color": 0x3498db}]})
-            mark_posted("weekly", iso)
-
-    # Process Monthly (1st of the month)
-    if do_monthly and has_posted("daily", iso):
-        month_prefix = (target["dt_obj"]).strftime("%Y-%m")
-        rank_m = sorted([(n, sum(int(v.replace(",","").replace("+","")) for d, v in dates.items() if d.startswith(month_prefix))) for n, dates in all_xp.items()], key=lambda x: x[1], reverse=True)
-        rank_m = [r for r in rank_m if r[1] > 0]
-        if rank_m:
-            badge = update_streak("monthly", rank_m[0][0])
-            post_to_discord({"embeds": [{"title": "🏆 Monthly Champion 🏆", "description": f"🗓️ Month: {month_prefix}", "fields": create_fields(rank_m, "monthly", badge), "color": 0x9b59b6}]})
-            mark_posted("monthly", iso)
+            print("✅ Discord Post Sent!")
+        else:
+            print("😴 Data found, but everyone had 0 XP gain. No post sent.")
+    else:
+        print("❌ Could not extract data for any characters.")
 
 if __name__ == "__main__":
     asyncio.run(main())
