@@ -58,16 +58,18 @@ def increment_attempts(date_str):
 async def scrape_tibiarise(char_name, session, target_date):
     # TibiaRise usually uses spaces or %20 in URLs
     formatted_name = char_name.replace(' ', '%20')
+    
+    # FIXED: Using /characters/ (plural)
     urls_to_try = [
-        f"https://tibiarise.app/character/{formatted_name}",
-        f"https://tibiarise.app/en/character/{formatted_name}"
+        f"https://tibiarise.app/characters/{formatted_name}",
+        f"https://tibiarise.app/en/characters/{formatted_name}"
     ]
     
     for url in urls_to_try:
         try:
             response = await session.get(url, timeout=15)
             if response.status_code != 200:
-                continue # If 404, try the /en/ version loop
+                continue 
 
             html = response.text
             soup = BeautifulSoup(html, "html.parser")
@@ -90,7 +92,6 @@ async def scrape_tibiarise(char_name, session, target_date):
                             return {target_date: formatted_xp}
             
             # If we get here, the date is on the page, but NOT in a standard <tr> table!
-            # Let's print the raw HTML around the date so we can calibrate the parser.
             idx = html.find(target_date)
             context = html[max(0, idx-50):min(len(html), idx+150)]
             print(f"⚠️ {char_name}: Date found, but layout is unknown. HTML Context:\n{context}")
