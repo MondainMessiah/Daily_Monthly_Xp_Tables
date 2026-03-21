@@ -16,6 +16,7 @@ JSON_PATH = BASE_DIR / "xp_log.json"
 PB_PATH = BASE_DIR / "personal_bests.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
 TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
+POST_STATE_PATH = BASE_DIR / "post_state.json" # NEW: Bot's memory file
 TIMEZONE = "Europe/London"
 
 def get_target_date():
@@ -37,6 +38,16 @@ def post_to_discord(payload):
     if url:
         try: requests.post(url, json=payload, timeout=10)
         except: pass
+
+# --- STATE MANAGEMENT (BOT MEMORY) ---
+def has_posted(category, date_str):
+    state = load_json(POST_STATE_PATH, {})
+    return state.get(category) == date_str
+
+def mark_posted(category, date_str):
+    state = load_json(POST_STATE_PATH, {})
+    state[category] = date_str
+    save_json(POST_STATE_PATH, state)
 
 # --- STEALTH SCRAPER ---
 async def scrape_xp_tab9(char_name, page, target_date):
@@ -137,12 +148,21 @@ def create_fields(ranking, category, streak_badge):
 # --- MAIN ENGINE ---
 async def main():
     target_date = get_target_date()
+    today = datetime.now(ZoneInfo(TIMEZONE))
+    
+    # 1. Determine what actually needs to be posted today
+    needs_daily = not has_posted("daily", target_date)
+    needs_weekly = (today.weekday() == 0) and not has_posted("weekly", target_date)
+    needs_monthly = (today.day == 1) and not has_posted("monthly", target_date)
+
+    if not (needs_daily or needs_weekly or needs_monthly):
+        print(f"⏩ Memory Check: Already posted everything required for {target_date}. Exiting.")
+        return # Stops the script immediately to save GitHub Action minutes
+        
     print(f"🎯 Target: {target_date}")
     
-    # Check if characters.txt is present
     if not CHAR_FILE.exists(): 
-        error_msg = f"❌ ERROR: Cannot find the file at {CHAR_FILE}"
-        print(error_msg)
+        print(f"❌ ERROR: Cannot find the file at {CHAR_FILE}")
         post_to_discord({"content": f"🚨 **Bot Error:** I cannot find the `characters.txt` file."})
         return
 
@@ -152,7 +172,6 @@ async def main():
     
     async with async_playwright() as p:
         for name in chars:
-            # 1. Launch a completely fresh browser for EVERY character (Amnesia Approach)
             browser = await p.chromium.launch(headless=True, args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
@@ -164,57 +183,52 @@ async def main():
             )
             page = await context.new_page()
             
-            # 2. Scrape the character
             new_data = await scrape_xp_tab9(name, page, target_date)
             
             if new_data:
                 if name not in all_xp: all_xp[name] = {}
                 all_xp[name].update(new_data)
                 
-            # 3. Completely close the browser to wipe the session
             await context.close()
             await browser.close()
             
-            # 4. Wait a random amount of time before launching the next browser
             delay = random.uniform(4.0, 8.0)
-            print(f"💤 Resting for {delay:.1f}s to avoid bot detection...")
             await asyncio.sleep(delay) 
             
     save_json(JSON_PATH, all_xp)
     
     # --- PROCESS DAILY LOGIC ---
-    rank_d = sorted([(n, int(d[target_date].replace(",","").replace("+",""))) for n, d in all_xp.items() if target_date in d], key=lambda x: x[1], reverse=True)
-    rank_d = [r for r in rank_d if r[1] > 0]
+    if needs_daily:
+        rank_d = sorted([(n, int(d[target_date].replace(",","").replace("+",""))) for n, d in all_xp.items() if target_date in d], key=lambda x: x[1], reverse=True)
+        rank_d = [r for r in rank_d if r[1] > 0]
 
-    if rank_d:
-        badge, announce = update_streak("daily", rank_d[0][0])
-        footer, color = calculate_growth("daily", sum(r[1] for r in rank_d))
-        post_to_discord({
-            "embeds": [{
-                "title": "🏆 Daily Champion 🏆", 
-                "description": f"🗓️ Date: {target_date}{announce}", 
-                "fields": create_fields(rank_d, "daily", badge), 
-                "color": color, 
-                "footer": {"text": footer}
-            }]
-        })
-        print("✅ Daily embed posted successfully!")
-    else:
-        print(f"⚠️ No data found for {target_date}.")
-        post_to_discord({"content": f"⚠️ **Data Missing:** GuildStats has not updated the highscores for `{target_date}` yet. I'll try again on the next scheduled run."})
+        if rank_d:
+            badge, announce = update_streak("daily", rank_d[0][0])
+            footer, color = calculate_growth("daily", sum(r[1] for r in rank_d))
+            post_to_discord({
+                "embeds": [{
+                    "title": "🏆 Daily Champion 🏆", 
+                    "description": f"🗓️ Date: {target_date}{announce}", 
+                    "fields": create_fields(rank_d, "daily", badge), 
+                    "color": color, 
+                    "footer": {"text": footer}
+                }]
+            })
+            mark_posted("daily", target_date) # Update memory!
+            print("✅ Daily embed posted successfully!")
+        else:
+            print(f"⚠️ No data found for {target_date}.")
+            # Tweak message to indicate it will check again
+            post_to_discord({"content": f"⚠️ **Data Missing:** GuildStats hasn't updated `{target_date}` yet. I'll automatically check again in a few hours!"})
 
-    # --- PROCESS WEEKLY & MONTHLY LOGIC ---
-    today = datetime.now(ZoneInfo(TIMEZONE))
-
-    # Weekly Logic (Runs on Mondays)
-    if today.weekday() == 0:
+    # --- PROCESS WEEKLY LOGIC ---
+    if needs_weekly:
         s = (today - timedelta(days=7)).strftime("%Y-%m-%d")
         e = (today - timedelta(days=1)).strftime("%Y-%m-%d")
         rank_w = []
         for n, dates in all_xp.items():
             weekly_xp = sum(int(v.replace(",", "").replace("+", "")) for d, v in dates.items() if s <= d <= e and "+" in v)
-            if weekly_xp > 0:
-                rank_w.append((n, weekly_xp))
+            if weekly_xp > 0: rank_w.append((n, weekly_xp))
         
         rank_w.sort(key=lambda x: x[1], reverse=True)
         if rank_w:
@@ -229,16 +243,16 @@ async def main():
                     "footer": {"text": footer}
                 }]
             })
+            mark_posted("weekly", target_date) # Update memory!
             print("✅ Weekly embed posted successfully!")
 
-    # Monthly Logic (Runs on the 1st of the month)
-    if today.day == 1:
+    # --- PROCESS MONTHLY LOGIC ---
+    if needs_monthly:
         prev_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
         rank_m = []
         for n, dates in all_xp.items():
             monthly_xp = sum(int(v.replace(",", "").replace("+", "")) for d, v in dates.items() if d.startswith(prev_month) and "+" in v)
-            if monthly_xp > 0:
-                rank_m.append((n, monthly_xp))
+            if monthly_xp > 0: rank_m.append((n, monthly_xp))
         
         rank_m.sort(key=lambda x: x[1], reverse=True)
         if rank_m:
@@ -253,6 +267,7 @@ async def main():
                     "footer": {"text": footer}
                 }]
             })
+            mark_posted("monthly", target_date) # Update memory!
             print("✅ Monthly embed posted successfully!")
 
 if __name__ == "__main__":
