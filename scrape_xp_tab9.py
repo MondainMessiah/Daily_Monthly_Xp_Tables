@@ -23,7 +23,7 @@ def get_target_info():
     dt = datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)
     return {
         "iso": dt.strftime("%Y-%m-%d"),
-        "euro": dt.strftime("%d/%m/%Y"),
+        "euro": dt.strftime("%d/%m/%Y"), # 20/03/2026
         "dt_obj": dt
     }
 
@@ -48,7 +48,7 @@ def mark_posted(category, date_str):
     state[category] = date_str
     save_json(POST_STATE_PATH, state)
 
-# --- THE DEEP JSON EXTRACTOR ---
+# --- THE TABLE TANK ---
 async def scrape_tibiarise(char_name, session, target):
     slug = char_name.replace(' ', '%20')
     url = f"https://tibiarise.app/en/character/{slug}"
@@ -60,38 +60,30 @@ async def scrape_tibiarise(char_name, session, target):
         if response.status_code != 200: return {}
 
         soup = BeautifulSoup(response.text, "html.parser")
-        script_tag = soup.find("script", id="__NEXT_DATA__")
         
-        if script_tag:
-            raw_content = script_tag.string
+        # We find every table row (tr) on the page
+        for tr in soup.find_all("tr"):
+            cells = tr.find_all(["td", "th"])
+            if len(cells) < 2: continue
             
-            # DIAGNOSTIC: If it fails, we want to see what the JSON structure looks like
-            # We search for the date and capture 200 characters around it
-            for d_str in [euro_date, iso_key]:
-                idx = raw_content.find(d_str)
-                if idx != -1:
-                    # Found the date! Now let's grab the numbers nearby.
-                    # We look for the closest "number": value
-                    context = raw_content[max(0, idx-150):min(len(raw_content), idx+150)]
-                    
-                    # Search for numbers (XP gains are usually long digits or 0)
-                    # We look for patterns like "experienceGained":0 or "xp":1234
-                    matches = re.findall(r'[:"](\d+)["},]', context)
-                    if matches:
-                        # Usually, the XP gain is one of the first numbers near the date.
-                        # We pick the one that is likely NOT the level (780-800)
-                        for m in matches:
-                            val = int(m)
-                            if val == 0 or val > 10000: # 0 is valid, big numbers are XP
-                                formatted_xp = f"+{val:,}"
-                                print(f"✅ {char_name}: Found {formatted_xp} XP (Context Match)")
-                                return {iso_key: formatted_xp}
+            row_text = tr.get_text(" ", strip=True)
             
-            # If we still haven't found it, print the context for debugging
-            print(f"⚠️ {char_name}: Date found but couldn't identify XP number.")
-        else:
-            print(f"⚠️ {char_name}: Could not find __NEXT_DATA__ script.")
+            # Match our date (20/03/2026)
+            if euro_date in row_text or iso_key in row_text:
+                # XP Gain is usually the cell immediately following the date
+                # We search all cells in this row for a number that isn't the date
+                for cell in cells:
+                    val_raw = cell.get_text(strip=True).replace(",", "").replace("+", "")
+                    if val_raw.isdigit():
+                        val = int(val_raw)
+                        # Filter: Experience gains are usually 0 or > 10,000
+                        # This ignores 'Level' (e.g. 790) or 'Rank' (e.g. 1)
+                        if val == 0 or val > 5000:
+                            formatted_xp = f"+{val:,}"
+                            print(f"✅ {char_name}: Found {formatted_xp} XP")
+                            return {iso_key: formatted_xp}
 
+        print(f"⚠️ {char_name}: Date {euro_date} not found in any table row.")
     except Exception as e:
         print(f"⚠️ {char_name}: Error - {str(e)}")
     return {}
@@ -135,7 +127,6 @@ def create_fields(rank, category, badge):
 async def main():
     target = get_target_info()
     iso = target["iso"]
-    today = datetime.now(ZoneInfo(TIMEZONE))
     
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     all_xp = load_json(JSON_PATH, {})
