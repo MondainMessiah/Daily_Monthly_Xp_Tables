@@ -1,49 +1,48 @@
-name: Run XP Scraper
+name: Tibia XP Tracker
 
 on:
   schedule:
-    - cron: '42 09 * * *' # 09:42 AM UTC
-  workflow_dispatch: 
-
-permissions:
-  contents: write
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # Opt-in to the new Node 24 engine
+    # Runs at 10:30, 13:30, 16:30, and 19:30 UTC every day
+    - cron: '30 10,13,16,19 * * *'
+  workflow_dispatch: # Allows you to trigger the script manually from the Actions tab
 
 jobs:
-  build:
+  scrape:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4 # Updated for Node 24 support
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5 # Updated for Node 24 support
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
-          pip install playwright beautifulsoup4 requests playwright-stealth
-          playwright install chromium
+          python -m pip install --upgrade pip
+          pip install playwright beautifulsoup4 requests
+          
+      - name: Install Playwright Browsers & Linux Dependencies
+        run: playwright install chromium --with-deps
 
-      - name: Run Scraper
+      - name: Run XP Scraper Script
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python scrape_xp_tab9.py
 
-      - name: Commit and Push changes
+      - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Adding all potential JSON files safely
-          git add xp_log.json personal_bests.json streaks.json totals_history.json || true
+          # This wildcard adds the new post_state.json memory file 
+          # along with your xp_logs, streaks, and PBs.
+          git add *.json || true
           
-          # Only commit if there are actual changes to save
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "Update XP logs and PBs"
+            git commit -m "Update XP logs, PBs, and Bot Memory"
             git push
           else
             echo "No changes to commit"
