@@ -20,21 +20,12 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright beautifulsoup4 requests
-          playwright install chromium --with-deps
+          pip install curl_cffi beautifulsoup4 requests
 
       - name: Run XP Scraper Script
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python scrape_xp_tab9.py
-
-      # NEW: This allows us to see the screenshot if the bot fails!
-      - name: Upload Debug Screenshot
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-screenshots
-          path: debug_*.png
 
       - name: Commit and push changes
         run: |
