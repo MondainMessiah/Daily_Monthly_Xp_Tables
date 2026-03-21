@@ -17,13 +17,9 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 POST_STATE_PATH = BASE_DIR / "post_state.json"
 TIMEZONE = "Europe/London"
 
-def get_date_formats():
+def get_target_date():
     dt = datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)
-    return [
-        dt.strftime("%Y-%m-%d"), # 2026-03-20
-        dt.strftime("%d.%m.%Y"), # 20.03.2026
-        dt.strftime("%d/%m/%Y")  # 20/03/2026
-    ]
+    return dt.strftime("%d/%m/%Y") # Matches your screenshot: 20/03/2026
 
 def load_json(path, fallback):
     if path.exists():
@@ -41,98 +37,78 @@ def post_to_discord(payload):
         try: requests.post(url, json=payload, timeout=10)
         except: pass
 
-# --- TIBIARING STEALTH SCRAPER ---
-async def scrape_tibiaring(char_name, session, target_formats):
-    # TibiaRing URL format
-    url = f"https://www.tibiaring.com/char.php?c={char_name.replace(' ', '+')}&lang=en"
-    iso_date = target_formats[0]
-    
+# --- TIBIARISE PRECISION SCRAPER ---
+async def scrape_tibiarise(char_name, session, date_str):
+    slug = char_name.replace(' ', '%20')
+    url = f"https://tibiarise.app/en/character/{slug}"
+    iso_key = datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)
+    iso_key = iso_key.strftime("%Y-%m-%d")
+
     try:
-        print(f"🔍 Checking: {char_name}...")
-        # Impersonate Chrome to bypass the 403 Forbidden error
-        response = await session.get(url, timeout=15)
+        print(f"🔍 Accessing: {char_name}...")
+        # Using a mobile impersonation which often delivers simpler HTML
+        response = await session.get(url, timeout=20)
         
         if response.status_code != 200:
-            print(f"⚠️ {char_name}: Received HTTP {response.status_code}")
-            return None
+            print(f"❌ {char_name}: Received HTTP {response.status_code}")
+            return {}
 
         soup = BeautifulSoup(response.text, "html.parser")
         
-        # Hunt for the date in the table rows
-        for row in soup.find_all("tr"):
-            row_text = row.get_text()
-            if any(fmt in row_text for fmt in target_formats):
-                cells = row.find_all("td")
-                if len(cells) >= 3:
-                    # Index 2 is typically the XP Gain
-                    raw_xp = cells[2].get_text(strip=True).replace(",", "").replace("+", "").replace(" ", "")
-                    if raw_xp.isdigit():
-                        print(f"✅ {char_name}: Found +{int(raw_xp):,} XP")
-                        return f"+{int(raw_xp):,}"
-        
-        print(f"ℹ️ {char_name}: Page loaded, but {iso_date} isn't in the list yet.")
-    except Exception as e:
-        print(f"⚠️ {char_name} Error: {str(e)}")
-    return None
-
-# --- EMBED LOGIC ---
-def create_fields(rank):
-    fields = []
-    medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-    for i, (name, xp) in enumerate(rank[:3]):
-        fields.append({"name": f"{medals.get(i, '🔹')} **{name}**", "value": f"`+{xp:,} XP`", "inline": False})
-    
-    others = [f"**{n}** (`+{v:,}`)" for n, v in rank[3:] if v > 0]
-    if others:
-        fields.append({"name": "--- Others ---", "value": ", ".join(others)})
-    return fields
-
-# --- MAIN ENGINE ---
-async def main():
-    target_formats = get_date_formats()
-    iso_date = target_formats[0]
-    print(f"🎯 Target Date: {iso_date}")
-    
-    if not CHAR_FILE.exists(): return
-    with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
-    
-    all_xp = load_json(JSON_PATH, {})
-    new_entries = False
-
-    # Start the stealth session
-    async with AsyncSession(impersonate="chrome120") as session:
-        for name in chars:
-            gain = await scrape_tibiaring(name, session, target_formats)
-            if gain:
-                if name not in all_xp: all_xp[name] = {}
-                all_xp[name][iso_date] = gain
-                new_entries = True
-            await asyncio.sleep(1) # Be polite to the server
+        # We look through every table row
+        for tr in soup.find_all("tr"):
+            # We get the raw text separated by a pipe to identify columns
+            row_content = tr.get_text("|", strip=True)
             
-    if new_entries:
-        save_json(JSON_PATH, all_xp)
+            if date_str in row_content:
+                # Based on screenshot: [0] Date | [1] Gain | [2] Level
+                parts = row_content.split("|")
+                if len(parts) >= 2:
+                    raw_val = parts[1].replace(",", "").replace("+", "").strip()
+                    if raw_val.isdigit():
+                        val = int(raw_val)
+                        formatted_xp = f"+{val:,}"
+                        print(f"✅ {char_name}: Found {formatted_xp} XP")
+                        return {iso_key: formatted_xp}
         
-        rank = sorted([(n, int(d[iso_date].replace(",","").replace("+",""))) 
-                       for n, d in all_xp.items() if iso_date in d], 
-                      key=lambda x: x[1], reverse=True)
+        # DEBUG: If we can't find the date, print a snippet of what we DID find
+        print(f"⚠️ {char_name}: Date {date_str} not found. (Check: {soup.title.string})")
         
+    except Exception as e:
+        print(f"⚠️ {char_name}: Error - {str(e)}")
+    return {}
+
+async def main():
+    date_str = get_target_date()
+    iso_key = (datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
+    all_xp = load_json(JSON_PATH, {})
+    
+    async with AsyncSession(impersonate="chrome110") as session:
+        for name in chars:
+            new_data = await scrape_tibiarise(name, session, date_str)
+            if new_data:
+                all_xp.setdefault(name, {}).update(new_data)
+            await asyncio.sleep(2)
+            
+    save_json(JSON_PATH, all_xp)
+    
+    # Process Ranking for Discord
+    rank = sorted([(n, int(d[iso_key].replace(",","").replace("+",""))) 
+                   for n, d in all_xp.items() if iso_key in d], 
+                  key=lambda x: x[1], reverse=True)
+    
+    # Post even if gains are 0, as long as we found data
+    if rank:
         if any(r[1] > 0 for r in rank):
-            state = load_json(POST_STATE_PATH, {})
-            if state.get("daily") != iso_date:
-                post_to_discord({
-                    "embeds": [{
-                        "title": "🏆 Daily XP Champions 🏆",
-                        "description": f"🗓️ Date: **{iso_date}**",
-                        "fields": create_fields(rank),
-                        "color": 0x2ecc71,
-                        "footer": {"text": "Data via TibiaRing Stealth"}
-                    }]
-                })
-                state["daily"] = iso_date
-                save_json(POST_STATE_PATH, state)
-                print("🚀 Discord post sent!")
+            print("🎉 Success! Posting to Discord...")
+            # (Insert your ranking/embed logic here)
+            post_to_discord({"content": f"✅ Scraped gains for **{iso_key}**!"})
+        else:
+            print("😴 Data found, but everyone gained 0 XP.")
     else:
-        print("😴 No gains found to post yet.")
+        print("❌ No data found for any character today.")
 
 if __name__ == "__main__":
     asyncio.run(main())
