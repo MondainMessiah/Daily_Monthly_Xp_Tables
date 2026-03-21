@@ -1,7 +1,6 @@
 import os
 import json
 import asyncio
-import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -23,7 +22,7 @@ def get_target_info():
     dt = datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)
     return {
         "iso": dt.strftime("%Y-%m-%d"),
-        "formats": [dt.strftime("%d/%m/%Y"), dt.strftime("%Y-%m-%d"), dt.strftime("%Y-%m-%dT")]
+        "euro": dt.strftime("%d/%m/%Y") # 20/03/2026
     }
 
 def load_json(path, fallback):
@@ -47,34 +46,49 @@ def mark_posted(category, date_str):
     state[category] = date_str
     save_json(POST_STATE_PATH, state)
 
-# --- TIBIARISE JSON EXTRACTOR ---
+# --- THE DEEP SEARCH ENGINE ---
+def find_xp_in_dict(obj, target_date):
+    """Recursively hunts through a dictionary for the XP gain of a specific date."""
+    if isinstance(obj, dict):
+        # Look for objects that have both a date and an experience field
+        # TibiaRise typically uses 'date' and 'experienceGained'
+        if obj.get('date') == target_date or obj.get('datetime') == target_date:
+            xp = obj.get('experienceGained') or obj.get('expGained') or obj.get('experience')
+            if xp is not None:
+                return xp
+        for val in obj.values():
+            result = find_xp_in_dict(val, target_date)
+            if result is not None: return result
+    elif isinstance(obj, list):
+        for item in obj:
+            result = find_xp_in_dict(item, target_date)
+            if result is not None: return result
+    return None
+
 async def scrape_tibiarise(char_name, session, target):
     slug = char_name.replace(' ', '%20')
-    # Use the confirmed working URL format
     url = f"https://tibiarise.app/en/character/{slug}"
     
     try:
         response = await session.get(url, timeout=15)
-        if response.status_code != 200:
-            return {}
+        if response.status_code != 200: return {}
 
-        # Hunt for Next.js JSON Data
         soup = BeautifulSoup(response.text, "html.parser")
         script = soup.find("script", id="__NEXT_DATA__")
         
-        raw_text = script.string if script else response.text
-        
-        # Try to find XP gain associated with any of our date formats
-        for fmt in target["formats"]:
-            # Pattern: find date, then look ahead for experienceGained
-            pattern = rf'"{fmt}".*?"experienceGained":(\d+)'
-            match = re.search(pattern, raw_text)
-            if match:
-                val = int(match.group(1))
-                print(f"✅ {char_name}: Found {val:,} XP")
-                return {target["iso"]: f"+{val:,}"}
+        if script:
+            data = json.loads(script.string)
+            # Search for the XP using both the Euro format and ISO format
+            xp_gain = find_xp_in_dict(data, target["euro"])
+            if xp_gain is None:
+                xp_gain = find_xp_in_dict(data, target["iso"])
+
+            if xp_gain is not None:
+                formatted_xp = f"+{int(xp_gain):,}"
+                print(f"✅ {char_name}: Found {formatted_xp} XP")
+                return {target["iso"]: formatted_xp}
                 
-        print(f"⚠️ {char_name}: No data found for {target['iso']}")
+        print(f"⚠️ {char_name}: Data for {target['euro']} not found in JSON.")
     except Exception as e:
         print(f"⚠️ {char_name}: Error - {str(e)}")
     return {}
@@ -108,7 +122,7 @@ def create_fields(ranking, category, badge):
         pct = (xp / max_xp) if max_xp > 0 else 0
         bar = "🟩" * round(pct * 10) + "⬛" * (10 - round(pct * 10))
         pb = check_pb(category, name, xp)
-        fields.append({"name": f"{medals[i]} **{name}{pb}{badge if i==0 else ''}**", "value": f"`+{xp:,} XP`\n{bar} `{int(pct*100)}%`", "inline": False})
+        fields.append({"name": f"{medals[i]} **{name}{pb}{badge if i==0 else ''}**", "value": f"`+{xp:,} XP`\n{bar} `{int(pct*100)}%`"})
     
     others = [f"`{idx}.` **{n}** (`+{v:,} XP`){check_pb(category, n, v)}" for idx, (n, v) in enumerate(ranking[3:], 4) if v > 0]
     if others: fields.append({"name": "--- Others ---", "value": "\n".join(others)})
@@ -131,25 +145,28 @@ async def main():
             
     save_json(JSON_PATH, all_xp)
     
-    # Process Ranking
     rank = sorted([(n, int(d[iso].replace(",","").replace("+",""))) for n, d in all_xp.items() if iso in d], key=lambda x: x[1], reverse=True)
-    rank = [r for r in rank if r[1] > 0]
-
+    
+    # Check if ANYONE has a result (even 0)
     if rank:
-        badge = update_streak("daily", rank[0][0])
-        post_to_discord({
-            "embeds": [{
-                "title": "🏆 Daily Champion 🏆",
-                "description": f"🗓️ Date: {iso}",
-                "fields": create_fields(rank, "daily", badge),
-                "color": 0x2ecc71,
-                "footer": {"text": "Data via TibiaRise • ⭐=PB 🔥=Streak 👑=Crown"}
-            }]
-        })
-        mark_posted("daily", iso)
-        print("✅ Discord Post Sent!")
+        # But we only post if someone gained XP
+        if any(r[1] > 0 for r in rank):
+            badge = update_streak("daily", rank[0][0])
+            post_to_discord({
+                "embeds": [{
+                    "title": "🏆 Daily Champion 🏆",
+                    "description": f"🗓️ Date: {iso}",
+                    "fields": create_fields([r for r in rank if r[1] > 0], "daily", badge),
+                    "color": 0x2ecc71,
+                    "footer": {"text": "TibiaRise Data • ⭐=PB 🔥=Streak 👑=Crown"}
+                }]
+            })
+            mark_posted("daily", iso)
+            print("✅ Discord Post Sent!")
+        else:
+            print("😴 Everyone found, but all had 0 XP gain.")
     else:
-        print("😴 No gains found today.")
+        print("❌ Could not find any data for any character.")
 
 if __name__ == "__main__":
     asyncio.run(main())
