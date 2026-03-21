@@ -56,37 +56,43 @@ def increment_attempts(date_str):
     save_json(POST_STATE_PATH, state)
     return count
 
-# --- CURL_CFFI SCRAPER ---
+# --- CURL_CFFI SCRAPER (CHATTY VERSION) ---
 async def scrape_xp_tab9(char_name, session, target_date):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     for attempt in range(2):
         try:
-            # This perfectly mimics Chrome 120's network fingerprint
             response = await session.get(url, timeout=15)
             
-            # Cloudflare trap check
-            if "Just a moment" in response.text or "Cloudflare" in response.text:
-                print(f"⚠️ {char_name}: Blocked by Cloudflare challenge.")
-                await asyncio.sleep(3)
+            # Check for Cloudflare Blocks
+            if response.status_code != 200:
+                print(f"⚠️ {char_name}: HTTP {response.status_code} (Cloudflare Blocked us)")
+                await asyncio.sleep(2)
                 continue
 
             soup = BeautifulSoup(response.text, "html.parser")
-            table = soup.select_one("#tabs1 > .newTable")
+            table = soup.select_one("#tabs1 .newTable")
             
+            # Check if Table is missing from HTML
+            if not table:
+                snippet = response.text[:100].replace('\n', ' ')
+                print(f"⚠️ {char_name}: Table missing. HTML Snippet: {snippet}")
+                return {}
+
             char_data = {}
-            if table:
-                for row in table.find_all("tr")[1:]:
-                    tds = row.find_all("td")
-                    if len(tds) >= 2:
-                        char_data[tds[0].get_text(strip=True)] = tds[1].get_text(strip=True)
+            for row in table.find_all("tr")[1:]:
+                tds = row.find_all("td")
+                if len(tds) >= 2:
+                    char_data[tds[0].get_text(strip=True)] = tds[1].get_text(strip=True)
             
             if target_date in char_data:
                 print(f"✅ {char_name}: Found {target_date}")
                 return char_data
-            
-            return {}
+            else:
+                print(f"⚠️ {char_name}: Table loaded, but no XP data for {target_date} yet.")
+                return {}
+
         except Exception as e:
-            print(f"⚠️ {char_name} (Attempt {attempt+1}): {type(e).__name__}")
+            print(f"⚠️ {char_name} (Attempt {attempt+1}): {type(e).__name__} - {str(e)}")
             await asyncio.sleep(2)
     return {}
 
@@ -159,23 +165,33 @@ async def main():
         return 
         
     print(f"🎯 Target: {target_date}")
+    
     if not CHAR_FILE.exists(): 
+        print(f"❌ ERROR: Cannot find the file at {CHAR_FILE}")
         post_to_discord({"content": f"🚨 **Bot Error:** I cannot find the `characters.txt` file."})
         return
 
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
+    
+    # NEW DIAGNOSTIC PRINT
+    print(f"👥 Loaded {len(chars)} characters from characters.txt")
+    if len(chars) == 0:
+        print("❌ ERROR: characters.txt is empty!")
+        return
+        
     all_xp = load_json(JSON_PATH, {})
     
-    # Launching curl_cffi Session
-    async with AsyncSession(impersonate="chrome120") as session:
-        for name in chars:
-            new_data = await scrape_xp_tab9(name, session, target_date)
-            if new_data:
-                if name not in all_xp: all_xp[name] = {}
-                all_xp[name].update(new_data)
-            
-            # Only need a tiny delay now
-            await asyncio.sleep(1) 
+    try:
+        async with AsyncSession(impersonate="chrome120") as session:
+            for name in chars:
+                new_data = await scrape_xp_tab9(name, session, target_date)
+                if new_data:
+                    if name not in all_xp: all_xp[name] = {}
+                    all_xp[name].update(new_data)
+                
+                await asyncio.sleep(1) 
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR IN SESSION: {e}")
             
     save_json(JSON_PATH, all_xp)
     
