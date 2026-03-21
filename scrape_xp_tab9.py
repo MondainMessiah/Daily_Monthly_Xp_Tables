@@ -20,8 +20,8 @@ def get_target_info():
     dt = datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)
     return {
         "iso": dt.strftime("%Y-%m-%d"),
-        "euro": dt.strftime("%d/%m/%Y"),
-        "short": dt.strftime("%-d/%-m/%Y") # Handles 20/3/2026
+        "euro": dt.strftime("%d/%m/%Y"), # 20/03/2026
+        "short": dt.strftime("%-d/%-m/%Y") # 20/3/2026
     }
 
 def load_json(path, fallback):
@@ -40,47 +40,31 @@ def post_to_discord(payload):
         try: requests.post(url, json=payload, timeout=10)
         except: pass
 
-# --- THE DEEP SCANNER ---
 async def scrape_tibiarise(char_name, session, target):
     slug = char_name.replace(' ', '%20')
-    # Trying the plural version which is more common for character lists
-    url = f"https://tibiarise.app/en/characters/{slug}"
+    # FIXED: Reverted to singular 'character'
+    url = f"https://tibiarise.app/en/character/{slug}"
     iso_key = target["iso"]
     
     try:
         print(f"📡 Requesting: {url}")
         response = await session.get(url, timeout=20)
         
-        # DEBUG: What is the title of the page we got?
-        soup = BeautifulSoup(response.text, "html.parser")
-        title = soup.title.string if soup.title else "No Title"
-        print(f"📄 Page Title: {title}")
-
-        if "Verify" in title or "Cloudflare" in title:
-            print(f"❌ {char_name}: Blocked by a Bot Verification screen.")
+        if response.status_code != 200:
+            print(f"❌ {char_name}: Received HTTP {response.status_code}")
             return {}
 
-        # SEARCH 1: The "Everything" Search
-        # We look for the date and the NEXT number that looks like XP
+        # SEARCH: Look for the date and the gain
+        # We search the raw text for the date followed by a large number (XP)
         patterns = [target["euro"], target["iso"], target["short"]]
         for p in patterns:
-            # This looks for the date, then skips characters until it finds a number
-            match = re.search(rf'{p}.*?(\+?[0-9,]{{4,}})', response.text, re.DOTALL)
+            # This regex looks for the date, then skips characters until it finds a number (+1,234,567)
+            # It avoids 3-digit numbers (Levels) by looking for 4+ digits
+            match = re.search(rf'{p}.*?([0-9,]{{4,}})', response.text, re.DOTALL)
             if match:
-                val = match.group(1).replace(",", "").replace("+", "")
-                print(f"✅ {char_name}: Found {val} XP via Deep Search!")
+                val = match.group(1).replace(",", "")
+                print(f"✅ {char_name}: Found {int(val):,} XP")
                 return {iso_key: f"+{int(val):,}"}
-
-        # SEARCH 2: The Table Row Search (BeautifulSoup)
-        for tr in soup.find_all("tr"):
-            row_text = tr.get_text(" ", strip=True)
-            if any(p in row_text for p in patterns):
-                tds = tr.find_all("td")
-                if len(tds) >= 2:
-                    xp_text = tds[1].get_text(strip=True).replace(",", "").replace("+", "")
-                    if xp_text.isdigit():
-                        print(f"✅ {char_name}: Found {xp_text} XP in table!")
-                        return {iso_key: f"+{int(xp_text):,}"}
 
         print(f"⚠️ {char_name}: Date {target['euro']} not found in source.")
         
@@ -105,12 +89,13 @@ async def main():
             
     save_json(JSON_PATH, all_xp)
     
-    # Simple check for Discord
-    rank = [n for n, d in all_xp.items() if iso in d]
-    if rank:
-        print(f"🎉 Success! Found data for {len(rank)} characters.")
+    # Simple check for results
+    found = [n for n, d in all_xp.items() if iso in d]
+    if found:
+        print(f"🎉 Success! Found data for: {', '.join(found)}")
+        # You can add your Discord ranking logic back here if this works!
     else:
-        print("❌ Final Attempt: No data found.")
+        print("❌ Still no data found. The site might not have yesterday's logs ready yet.")
 
 if __name__ == "__main__":
     asyncio.run(main())
