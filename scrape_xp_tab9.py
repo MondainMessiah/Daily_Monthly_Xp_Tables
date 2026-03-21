@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 import requests
 
 # --- SETTINGS & PATHING ---
@@ -16,11 +17,10 @@ JSON_PATH = BASE_DIR / "xp_log.json"
 PB_PATH = BASE_DIR / "personal_bests.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
 TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
-POST_STATE_PATH = BASE_DIR / "post_state.json" # NEW: Bot's memory file
+POST_STATE_PATH = BASE_DIR / "post_state.json"
 TIMEZONE = "Europe/London"
 
 def get_target_date():
-    """Strictly targets yesterday's date, as Tibia server saves reflect the previous day."""
     return (datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 def load_json(path, fallback):
@@ -39,7 +39,7 @@ def post_to_discord(payload):
         try: requests.post(url, json=payload, timeout=10)
         except: pass
 
-# --- STATE MANAGEMENT (BOT MEMORY) ---
+# --- STATE MANAGEMENT ---
 def has_posted(category, date_str):
     state = load_json(POST_STATE_PATH, {})
     return state.get(category) == date_str
@@ -54,8 +54,8 @@ async def scrape_xp_tab9(char_name, page, target_date):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     for attempt in range(2):
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=40000)
-            await asyncio.sleep(3) # Let JavaScript build the table
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            await asyncio.sleep(4) # Slightly longer wait to let Cloudflare pass
             await page.wait_for_selector("#tabs1 > .newTable", timeout=15000)
             
             soup = BeautifulSoup(await page.content(), "html.parser")
@@ -75,7 +75,7 @@ async def scrape_xp_tab9(char_name, page, target_date):
             return {}
         except Exception as e:
             print(f"⚠️ {char_name} (Attempt {attempt+1}): {type(e).__name__}")
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
     return {}
 
 # --- LOGIC & FORMATTING FUNCTIONS ---
@@ -150,14 +150,13 @@ async def main():
     target_date = get_target_date()
     today = datetime.now(ZoneInfo(TIMEZONE))
     
-    # 1. Determine what actually needs to be posted today
     needs_daily = not has_posted("daily", target_date)
     needs_weekly = (today.weekday() == 0) and not has_posted("weekly", target_date)
     needs_monthly = (today.day == 1) and not has_posted("monthly", target_date)
 
     if not (needs_daily or needs_weekly or needs_monthly):
         print(f"⏩ Memory Check: Already posted everything required for {target_date}. Exiting.")
-        return # Stops the script immediately to save GitHub Action minutes
+        return 
         
     print(f"🎯 Target: {target_date}")
     
@@ -175,13 +174,19 @@ async def main():
             browser = await p.chromium.launch(headless=True, args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-setuid-sandbox"
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage"
             ])
+            
+            # Use a slightly older Chrome user agent, which sometimes triggers fewer alarms
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 viewport={'width': 1920, 'height': 1080}
             )
             page = await context.new_page()
+            
+            # INJECT STEALTH HERE
+            await stealth_async(page)
             
             new_data = await scrape_xp_tab9(name, page, target_date)
             
@@ -192,7 +197,7 @@ async def main():
             await context.close()
             await browser.close()
             
-            delay = random.uniform(4.0, 8.0)
+            delay = random.uniform(3.0, 7.0)
             await asyncio.sleep(delay) 
             
     save_json(JSON_PATH, all_xp)
@@ -214,11 +219,10 @@ async def main():
                     "footer": {"text": footer}
                 }]
             })
-            mark_posted("daily", target_date) # Update memory!
+            mark_posted("daily", target_date)
             print("✅ Daily embed posted successfully!")
         else:
             print(f"⚠️ No data found for {target_date}.")
-            # Tweak message to indicate it will check again
             post_to_discord({"content": f"⚠️ **Data Missing:** GuildStats hasn't updated `{target_date}` yet. I'll automatically check again in a few hours!"})
 
     # --- PROCESS WEEKLY LOGIC ---
@@ -243,7 +247,7 @@ async def main():
                     "footer": {"text": footer}
                 }]
             })
-            mark_posted("weekly", target_date) # Update memory!
+            mark_posted("weekly", target_date)
             print("✅ Weekly embed posted successfully!")
 
     # --- PROCESS MONTHLY LOGIC ---
@@ -267,7 +271,7 @@ async def main():
                     "footer": {"text": footer}
                 }]
             })
-            mark_posted("monthly", target_date) # Update memory!
+            mark_posted("monthly", target_date)
             print("✅ Monthly embed posted successfully!")
 
 if __name__ == "__main__":
