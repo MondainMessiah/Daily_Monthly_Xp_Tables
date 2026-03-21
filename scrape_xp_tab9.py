@@ -19,6 +19,19 @@ TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
 POST_STATE_PATH = BASE_DIR / "post_state.json"
 TIMEZONE = "Europe/London"
 
+# NEW: Faking standard human browser requests
+HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Referer": "https://guildstats.eu/",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1"
+}
+
 def get_target_date():
     return (datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -56,26 +69,23 @@ def increment_attempts(date_str):
     save_json(POST_STATE_PATH, state)
     return count
 
-# --- CURL_CFFI SCRAPER (CHATTY VERSION) ---
+# --- CURL_CFFI SCRAPER ---
 async def scrape_xp_tab9(char_name, session, target_date):
     url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
     for attempt in range(2):
         try:
-            response = await session.get(url, timeout=15)
+            response = await session.get(url, headers=HEADERS, timeout=15)
             
-            # Check for Cloudflare Blocks
             if response.status_code != 200:
                 print(f"⚠️ {char_name}: HTTP {response.status_code} (Cloudflare Blocked us)")
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 continue
 
             soup = BeautifulSoup(response.text, "html.parser")
             table = soup.select_one("#tabs1 .newTable")
             
-            # Check if Table is missing from HTML
             if not table:
-                snippet = response.text[:100].replace('\n', ' ')
-                print(f"⚠️ {char_name}: Table missing. HTML Snippet: {snippet}")
+                print(f"⚠️ {char_name}: Table missing from HTML.")
                 return {}
 
             char_data = {}
@@ -88,7 +98,6 @@ async def scrape_xp_tab9(char_name, session, target_date):
                 print(f"✅ {char_name}: Found {target_date}")
                 return char_data
             else:
-                print(f"⚠️ {char_name}: Table loaded, but no XP data for {target_date} yet.")
                 return {}
 
         except Exception as e:
@@ -167,29 +176,24 @@ async def main():
     print(f"🎯 Target: {target_date}")
     
     if not CHAR_FILE.exists(): 
-        print(f"❌ ERROR: Cannot find the file at {CHAR_FILE}")
         post_to_discord({"content": f"🚨 **Bot Error:** I cannot find the `characters.txt` file."})
         return
 
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
-    
-    # NEW DIAGNOSTIC PRINT
     print(f"👥 Loaded {len(chars)} characters from characters.txt")
-    if len(chars) == 0:
-        print("❌ ERROR: characters.txt is empty!")
-        return
-        
+    
     all_xp = load_json(JSON_PATH, {})
     
     try:
-        async with AsyncSession(impersonate="chrome120") as session:
+        # CHANGED TO SAFARI TO TRY AND BYPASS DATACENTER BLOCK
+        async with AsyncSession(impersonate="safari15_5") as session:
             for name in chars:
                 new_data = await scrape_xp_tab9(name, session, target_date)
                 if new_data:
                     if name not in all_xp: all_xp[name] = {}
                     all_xp[name].update(new_data)
                 
-                await asyncio.sleep(1) 
+                await asyncio.sleep(random.uniform(1.5, 3.5)) 
     except Exception as e:
         print(f"❌ CRITICAL ERROR IN SESSION: {e}")
             
