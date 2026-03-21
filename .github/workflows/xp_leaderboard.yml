@@ -23,6 +23,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          
+      # CRITICAL: This installs the headless browser for TibiaRise
+      - name: Install Playwright Browsers & Linux Dependencies
+        run: playwright install chromium --with-deps
 
       - name: Run XP Scraper Script
         env:
