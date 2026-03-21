@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import random
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -50,7 +51,6 @@ def post_to_discord(payload):
         try: requests.post(url, json=payload, timeout=10)
         except: pass
 
-# --- STATE & RETRY MANAGEMENT ---
 def has_posted(category, date_str):
     state = load_json(POST_STATE_PATH, {})
     return state.get(category) == date_str
@@ -68,46 +68,49 @@ def increment_attempts(date_str):
     save_json(POST_STATE_PATH, state)
     return count
 
-# --- CURL_CFFI SCRAPER ---
+# --- UNIVERSAL DATE HUNTER ---
 async def scrape_xp_tab9(char_name, session, target_date):
-    url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9"
+    # Added &lang=en to ensure table formats are standardized
+    url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9&lang=en"
     for attempt in range(2):
         try:
             response = await session.get(url, headers=HEADERS, timeout=15)
             
             if response.status_code != 200:
-                print(f"⚠️ {char_name}: HTTP {response.status_code} (Cloudflare Blocked us)")
+                print(f"⚠️ {char_name}: HTTP {response.status_code} (Cloudflare Block)")
                 await asyncio.sleep(3)
                 continue
 
-            soup = BeautifulSoup(response.text, "html.parser")
+            html = response.text
+            soup = BeautifulSoup(html, "html.parser")
             
-            # Universal Table Hunter
-            table = None
-            for t in soup.find_all("table"):
-                if "Exp change" in t.text or "Date" in t.text:
-                    table = t
-                    if len(t.find_all("tr")) > 5: # Make sure it's the big data table
-                        break
-            
-            if not table:
-                title = soup.title.string if soup.title else "No Title"
-                print(f"⚠️ {char_name}: Table missing. Page Title: '{title}'.")
-                return {}
+            # DIAGNOSTIC CHECK
+            date_in_html = target_date in html
+            tables_count = len(soup.find_all("table"))
+            print(f"🔍 {char_name}: Found {tables_count} tables. Date string in raw HTML? {date_in_html}")
+
+            if not date_in_html:
+                return {} # If the date isn't even in the code, we can't scrape it.
 
             char_data = {}
-            for row in table.find_all("tr")[1:]:
-                tds = row.find_all("td")
-                if len(tds) >= 2:
-                    char_data[tds[0].get_text(strip=True)] = tds[1].get_text(strip=True)
             
-            if target_date in char_data:
-                print(f"✅ {char_name}: Found {target_date}")
-                return char_data
-            else:
-                print(f"⚠️ {char_name}: Table loaded, but no XP data for {target_date} yet.")
-                return {}
-
+            # Search every single table row globally
+            for tr in soup.find_all("tr"):
+                row_text = tr.get_text(separator=" ", strip=True)
+                if target_date in row_text:
+                    tds = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+                    
+                    # Look for the XP Change column (Usually contains a + and a large number)
+                    for td in tds:
+                        clean_val = td.replace(",", "").replace("+", "").strip()
+                        if clean_val.isdigit() and ("+" in td):
+                            # Ensure it's not the "Level Change" column (+1 or +2)
+                            if int(clean_val) > 100: 
+                                char_data[target_date] = td
+                                print(f"✅ {char_name}: Found {target_date} ({td})")
+                                return char_data
+                                
+            return {}
         except Exception as e:
             print(f"⚠️ {char_name} (Attempt {attempt+1}): {type(e).__name__} - {str(e)}")
             await asyncio.sleep(2)
@@ -193,14 +196,15 @@ async def main():
     all_xp = load_json(JSON_PATH, {})
     
     try:
-        async with AsyncSession(impersonate="safari15_5") as session:
+        # Changed to Chrome110 for high stability
+        async with AsyncSession(impersonate="chrome110") as session:
             for name in chars:
                 new_data = await scrape_xp_tab9(name, session, target_date)
                 if new_data:
                     if name not in all_xp: all_xp[name] = {}
                     all_xp[name].update(new_data)
                 
-                await asyncio.sleep(random.uniform(1.5, 3.5)) 
+                await asyncio.sleep(random.uniform(1.0, 2.0)) 
     except Exception as e:
         print(f"❌ CRITICAL ERROR IN SESSION: {e}")
             
