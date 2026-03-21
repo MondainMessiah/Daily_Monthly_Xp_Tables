@@ -1,38 +1,24 @@
 import os
 import json
 import asyncio
-import random
-import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
 import requests
 
 # --- SETTINGS & PATHING ---
 BASE_DIR = Path(__file__).resolve().parent
 CHAR_FILE = BASE_DIR / "characters.txt"
-JSON_PATH = BASE_DIR / "xp_log.json"
+JSON_PATH = BASE_DIR / "xp_log.json" # Your existing history!
 PB_PATH = BASE_DIR / "personal_bests.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
 TOTALS_HISTORY_PATH = BASE_DIR / "totals_history.json"
 POST_STATE_PATH = BASE_DIR / "post_state.json"
+LIFETIME_PATH = BASE_DIR / "lifetime_xp.json" # New math file
 TIMEZONE = "Europe/London"
 
-HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Referer": "https://guildstats.eu/",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1"
-}
-
 def get_target_date():
+    # We still use yesterday's date so it perfectly aligns with your old GuildStats history
     return (datetime.now(ZoneInfo(TIMEZONE)) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 def load_json(path, fallback):
@@ -60,61 +46,17 @@ def mark_posted(category, date_str):
     state[category] = date_str
     save_json(POST_STATE_PATH, state)
 
-def increment_attempts(date_str):
-    state = load_json(POST_STATE_PATH, {})
-    tracker = state.get("daily_attempts", {})
-    count = tracker.get("count", 0) + 1 if tracker.get("date") == date_str else 1
-    state["daily_attempts"] = {"date": date_str, "count": count}
-    save_json(POST_STATE_PATH, state)
-    return count
-
-# --- UNIVERSAL DATE HUNTER ---
-async def scrape_xp_tab9(char_name, session, target_date):
-    # Added &lang=en to ensure table formats are standardized
-    url = f"https://guildstats.eu/character?nick={char_name.replace(' ', '+')}&tab=9&lang=en"
-    for attempt in range(2):
-        try:
-            response = await session.get(url, headers=HEADERS, timeout=15)
-            
-            if response.status_code != 200:
-                print(f"⚠️ {char_name}: HTTP {response.status_code} (Cloudflare Block)")
-                await asyncio.sleep(3)
-                continue
-
-            html = response.text
-            soup = BeautifulSoup(html, "html.parser")
-            
-            # DIAGNOSTIC CHECK
-            date_in_html = target_date in html
-            tables_count = len(soup.find_all("table"))
-            print(f"🔍 {char_name}: Found {tables_count} tables. Date string in raw HTML? {date_in_html}")
-
-            if not date_in_html:
-                return {} # If the date isn't even in the code, we can't scrape it.
-
-            char_data = {}
-            
-            # Search every single table row globally
-            for tr in soup.find_all("tr"):
-                row_text = tr.get_text(separator=" ", strip=True)
-                if target_date in row_text:
-                    tds = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
-                    
-                    # Look for the XP Change column (Usually contains a + and a large number)
-                    for td in tds:
-                        clean_val = td.replace(",", "").replace("+", "").strip()
-                        if clean_val.isdigit() and ("+" in td):
-                            # Ensure it's not the "Level Change" column (+1 or +2)
-                            if int(clean_val) > 100: 
-                                char_data[target_date] = td
-                                print(f"✅ {char_name}: Found {target_date} ({td})")
-                                return char_data
-                                
-            return {}
-        except Exception as e:
-            print(f"⚠️ {char_name} (Attempt {attempt+1}): {type(e).__name__} - {str(e)}")
-            await asyncio.sleep(2)
-    return {}
+# --- TIBIADATA API MATHER ---
+def fetch_total_xp(char_name):
+    url = f"https://api.tibiadata.com/v4/character/{char_name.replace(' ', '%20')}"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("character", {}).get("character", {}).get("experience", 0)
+    except Exception as e:
+        print(f"⚠️ Error fetching {char_name}: {e}")
+    return 0
 
 # --- LOGIC & FORMATTING FUNCTIONS ---
 def check_pb(category, name, current_xp):
@@ -172,7 +114,7 @@ def create_fields(ranking, category, streak_badge):
     return fields
 
 # --- MAIN ENGINE ---
-async def main():
+def main():
     target_date = get_target_date()
     today = datetime.now(ZoneInfo(TIMEZONE))
     
@@ -193,42 +135,47 @@ async def main():
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     print(f"👥 Loaded {len(chars)} characters from characters.txt")
     
+    # Load your historical JSON and the new Lifetime Tracker
     all_xp = load_json(JSON_PATH, {})
+    lifetimes = load_json(LIFETIME_PATH, {})
     
-    try:
-        # Changed to Chrome110 for high stability
-        async with AsyncSession(impersonate="chrome110") as session:
-            for name in chars:
-                new_data = await scrape_xp_tab9(name, session, target_date)
-                if new_data:
+    daily_gains = []
+    
+    # 1. Fetch Current XP and Calculate Gains
+    for name in chars:
+        current_total_xp = fetch_total_xp(name)
+        
+        if current_total_xp > 0:
+            if name in lifetimes:
+                gained = current_total_xp - lifetimes[name]
+                if gained > 0:
+                    daily_gains.append((name, gained))
+                    print(f"✅ {name}: Gained {gained:,} XP!")
+                    
+                    # 🌟 THE BRIDGE: Format exactly like GuildStats to preserve history!
                     if name not in all_xp: all_xp[name] = {}
-                    all_xp[name].update(new_data)
+                    all_xp[name][target_date] = f"+{gained:,}"
+            else:
+                print(f"📝 {name}: First day tracking API! Saved Total XP as baseline.")
                 
-                await asyncio.sleep(random.uniform(1.0, 2.0)) 
-    except Exception as e:
-        print(f"❌ CRITICAL ERROR IN SESSION: {e}")
+            # Update the hidden math file with today's massive XP number
+            lifetimes[name] = current_total_xp
             
+    # Save both files
+    save_json(LIFETIME_PATH, lifetimes)
     save_json(JSON_PATH, all_xp)
     
     # --- PROCESS DAILY LOGIC & ALERTS ---
     if needs_daily:
-        rank_d = sorted([(n, int(d[target_date].replace(",","").replace("+",""))) for n, d in all_xp.items() if target_date in d], key=lambda x: x[1], reverse=True)
-        rank_d = [r for r in rank_d if r[1] > 0]
-
-        if rank_d:
-            badge, announce = update_streak("daily", rank_d[0][0])
-            footer, color = calculate_growth("daily", sum(r[1] for r in rank_d))
-            post_to_discord({"embeds": [{"title": "🏆 Daily Champion 🏆", "description": f"🗓️ Date: {target_date}{announce}", "fields": create_fields(rank_d, "daily", badge), "color": color, "footer": {"text": footer}}]})
+        if daily_gains:
+            daily_gains.sort(key=lambda x: x[1], reverse=True)
+            badge, announce = update_streak("daily", daily_gains[0][0])
+            footer, color = calculate_growth("daily", sum(r[1] for r in daily_gains))
+            post_to_discord({"embeds": [{"title": "🏆 Daily Champion 🏆", "description": f"🗓️ Date: {target_date}{announce}", "fields": create_fields(daily_gains, "daily", badge), "color": color, "footer": {"text": footer}}]})
             mark_posted("daily", target_date)
             print("✅ Daily embed posted successfully!")
         else:
-            print(f"⚠️ No data found for {target_date}.")
-            attempts = increment_attempts(target_date)
-            max_attempts = 5
-            if attempts < max_attempts:
-                post_to_discord({"content": f"⚠️ **Data Missing:** GuildStats hasn't updated `{target_date}` yet. I will automatically check again in one hour. *(Attempt {attempts}/{max_attempts})*"})
-            elif attempts == max_attempts:
-                post_to_discord({"content": f"❌ **Data Missing:** GuildStats still hasn't updated `{target_date}` and I have reached my maximum of {max_attempts} attempts. I will try again tomorrow."})
+            print(f"⚠️ No daily gains calculated. This is normal if this is the first API run, or if nobody hunted!")
 
     # --- PROCESS WEEKLY & MONTHLY LOGIC ---
     if needs_weekly and has_posted("daily", target_date): 
@@ -253,4 +200,4 @@ async def main():
             mark_posted("monthly", target_date)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
