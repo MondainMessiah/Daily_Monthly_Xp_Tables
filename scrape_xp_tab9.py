@@ -47,7 +47,7 @@ def mark_posted(category, date_str):
     state[category] = date_str
     save_json(POST_STATE_PATH, state)
 
-# --- TIBIARISE MASTER SCRAPER ---
+# --- TIBIARISE STEALTH SCRAPER ---
 async def scrape_tibiarise(char_name, page, site_date):
     formatted_name = char_name.replace(' ', '%20')
     url = f"https://tibiarise.app/en/characters/{formatted_name}"
@@ -55,36 +55,39 @@ async def scrape_tibiarise(char_name, page, site_date):
     
     try:
         print(f"🔍 Loading {char_name}...")
+        # Go to page and wait for basic load
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         
-        # WAIT FOR DATA: Wait until the specific date text appears in the table
+        # TRICK 1: Scroll down to trigger lazy-loading of the table
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+        await asyncio.sleep(2)
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        
+        # TRICK 2: Wait for the "Experience on last 30 days" header
         try:
-            await page.wait_for_selector(f"text={site_date}", timeout=25000)
+            await page.wait_for_selector("text=Experience", timeout=20000)
         except:
-            print(f"⚠️ {char_name}: Date {site_date} never appeared. Site might be slow.")
+            print(f"⚠️ {char_name}: Header 'Experience' didn't load.")
             return {}
 
-        await asyncio.sleep(2) 
+        await asyncio.sleep(3) 
         
-        # Get all table rows
-        rows = await page.locator("tr").all()
+        # TRICK 3: Find the row by text content (more robust than CSS selectors)
+        rows = await page.get_by_role("row").all()
         for row in rows:
-            row_text = await row.inner_text()
-            if site_date in row_text:
-                # Get all cells in this specific row
-                cells = await row.locator("td").all_inner_texts()
-                
+            text = await row.inner_text()
+            if site_date in text:
+                cells = await row.get_by_role("cell").all_inner_texts()
                 if len(cells) >= 2:
-                    # Column 0 = Date, Column 1 = XP Gained
+                    # Column 1 is XP Gained
                     raw_xp = cells[1].replace(",", "").replace("+", "").replace(" ", "").strip()
-                    
                     if raw_xp.isdigit():
                         val = int(raw_xp)
                         formatted_xp = f"+{val:,}"
                         print(f"✅ {char_name}: Found {site_date} -> {formatted_xp} XP")
                         return {iso_key: formatted_xp}
                         
-        print(f"⚠️ {char_name}: Row for {site_date} found but XP column was empty.")
+        print(f"⚠️ {char_name}: Found the page, but date {site_date} isn't in the table yet.")
     except Exception as e:
         print(f"⚠️ {char_name}: Error - {str(e)}")
     return {}
@@ -152,16 +155,24 @@ async def main():
 
     print(f"🎯 Target: {iso_key} (Searching for: {site_date})")
     
+    if not CHAR_FILE.exists():
+        print("❌ Error: characters.txt not found.")
+        return
+        
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     all_xp = load_json(JSON_PATH, {})
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # Use a high-quality human profile to avoid bot detection
+        # TRICK 4: Full Stealth Context
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 800}
+            viewport={'width': 1280, 'height': 800},
+            java_script_enabled=True
         )
+        # Remove the 'webdriver' flag
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
         page = await context.new_page()
         
         for name in chars:
@@ -169,12 +180,11 @@ async def main():
             if new_data:
                 if name not in all_xp: all_xp[name] = {}
                 all_xp[name].update(new_data)
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
         await browser.close()
             
     save_json(JSON_PATH, all_xp)
     
-    # Check if we have any data for the target date
     rank_d = []
     for n, d in all_xp.items():
         if iso_key in d:
@@ -197,7 +207,7 @@ async def main():
         mark_posted("daily", iso_key)
         print("✅ Daily leaderboard posted!")
     else:
-        print("😴 Everyone had 0 XP gain or data is still missing. No post sent.")
+        print("😴 No XP gains found for this date. No post sent.")
 
 if __name__ == "__main__":
     asyncio.run(main())
