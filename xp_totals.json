@@ -1,18 +1,22 @@
 {
   "Jay The Pally": {
     "xp": 19405034323,
-    "rank": 228
+    "rank": 228,
+    "move": "\u23fa\ufe0f"
   },
   "Hex Good": {
     "xp": 10665124862,
-    "rank": 452
+    "rank": 452,
+    "move": "\u23fa\ufe0f"
   },
   "Kamikadzei": {
     "xp": 9883345957,
-    "rank": 486
+    "rank": 486,
+    "move": "\u23fa\ufe0f"
   },
   "Ilumine": {
     "xp": 8166862659,
-    "rank": 577
+    "rank": 577,
+    "move": "\u23fa\ufe0f"
   }
 }
