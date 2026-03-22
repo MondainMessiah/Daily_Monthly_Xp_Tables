@@ -1,6 +1,18 @@
 {
-  "Jay The Pally": 19405034323,
-  "Hex Good": 10665124862,
-  "Kamikadzei": 9883345957,
-  "Ilumine": 8166862659
+  "Jay The Pally": {
+    "xp": 19405034323,
+    "rank": 228
+  },
+  "Hex Good": {
+    "xp": 10665124862,
+    "rank": 452
+  },
+  "Kamikadzei": {
+    "xp": 9883345957,
+    "rank": 486
+  },
+  "Ilumine": {
+    "xp": 8166862659,
+    "rank": 577
+  }
 }
