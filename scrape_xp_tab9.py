@@ -83,7 +83,8 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
         
         save_json(STREAKS_PATH, streaks)
         s_icon = "👑" if s_data["count"] >= 5 else "🔥"
-        streak_info_part = f" | Winner Streak: {s_icon} {s_data['count']}"
+        # Formatted specifically to sit on a new line in the footer
+        streak_info_part = f"Winner Streak: {s_icon} {s_data['count']} | "
 
     # 2. PLAYER CARDS
     for i, item in enumerate(ranking[:3]):
@@ -93,16 +94,19 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
         move_str = f" ({move})" if move != "⏺️" else ""
         
         s_text = f" {s_icon} `{s_data['count']}`" if i == 0 and post_type == "daily" else ""
-        base_desc = f"🌍 **World Rank: #{rank}**{move_str}\n`+{gain:,} XP` earned\n{make_bar(gain, max_gain)} `{pct}%`"
+        
+        # World rank moved below the XP Bar
+        base_desc = f"`+{gain:,} XP` earned\n{make_bar(gain, max_gain)} `{pct}%`\n🌍 **World Rank: #{rank}**{move_str}"
         
         if i == 0:
+            # Removed the author (🥇) entirely for 1st place so the Title sits at the top
             embed = {
-                "author": {"name": f"{medals[i]}"},
                 "color": medal_colors.get(i, CLR_MAIN),
                 "title": f"🏆 {title} 🏆",
                 "description": f"🗓️ Period: **{date_label}**\n\n🏆 **Winner: {name}**{s_text}\n\n{base_desc}"
             }
         else:
+            # 2nd and 3rd place retain their Silver/Bronze medals in the author field
             embed = {
                 "author": {"name": f"{medals[i]} {name}"},
                 "color": medal_colors.get(i, CLR_MAIN),
@@ -113,8 +117,9 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
     # 3. OTHER GAINS & FOOTER
     others = [f"**{it['name']}** (+{it['gain']:,} XP)" for it in ranking[3:] if it['gain'] > 0]
     
-    streak_legend = " | Streaks: 1-4 🔥 5+ 👑"
-    footer_text = f"Total: {team_total:,} XP | World: {WORLD}{streak_info_part}{streak_legend}\n⚠️ Only Top 1000 can be tracked"
+    streak_legend = "Streaks: 1-4 🔥 5+ 👑"
+    # Adjusted formatting for new lines
+    footer_text = f"Total: {team_total:,} XP | World: {WORLD}\n{streak_info_part}{streak_legend}\n⚠️ Only Top 1000 can be tracked"
     
     footer_embed = {"color": CLR_MAIN, "footer": {"text": footer_text}}
     if others:
@@ -136,7 +141,6 @@ def main():
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     
     current_stats = {}; found_count = 0
-    # Create a lowercase map to safely check manual logs
     lower_logs = {k.lower(): v for k, v in logs.items()}
 
     # 1. API LOOP
@@ -160,8 +164,6 @@ def main():
 
                     gain = curr_xp - last_xp if last_xp > 0 else 0
                     
-                    # --- THE OVERRIDE LOCK ---
-                    # Only log the live API gain if you haven't manually entered a value for yesterday
                     existing_manual_val = parse_xp(lower_logs.get(name.lower(), {}).get(yest, 0))
                     if existing_manual_val == 0 and gain > 0:
                         if name not in logs: logs[name] = {}
