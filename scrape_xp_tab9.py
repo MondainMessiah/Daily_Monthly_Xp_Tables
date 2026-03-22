@@ -83,7 +83,6 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
         
         save_json(STREAKS_PATH, streaks)
         s_icon = "👑" if s_data["count"] >= 5 else "🔥"
-        # Formatted specifically to sit on a new line in the footer
         streak_info_part = f"Winner Streak: {s_icon} {s_data['count']} | "
 
     # 2. PLAYER CARDS
@@ -95,22 +94,21 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
         
         s_text = f" {s_icon} `{s_data['count']}`" if i == 0 and post_type == "daily" else ""
         
-        # World rank moved below the XP Bar
-        base_desc = f"`+{gain:,} XP` earned\n{make_bar(gain, max_gain)} `{pct}%`\n🌍 **World Rank: #{rank}**{move_str}"
+        # Black background for World Rank, "earned" removed from XP
+        base_desc = f"`+{gain:,} XP`\n{make_bar(gain, max_gain)} `{pct}%`\n🌍 `World Rank: #{rank}`{move_str}"
         
         if i == 0:
-            # Removed the author (🥇) entirely for 1st place so the Title sits at the top
             embed = {
                 "color": medal_colors.get(i, CLR_MAIN),
                 "title": f"🏆 {title} 🏆",
-                "description": f"🗓️ Period: **{date_label}**\n\n🏆 **Winner: {name}**{s_text}\n\n{base_desc}"
+                # Black background applied to "Winner: Name"
+                "description": f"🗓️ Period: **{date_label}**\n\n🏆 `Winner: {name}`{s_text}\n\n{base_desc}"
             }
         else:
-            # 2nd and 3rd place retain their Silver/Bronze medals in the author field
             embed = {
-                "author": {"name": f"{medals[i]} {name}"},
                 "color": medal_colors.get(i, CLR_MAIN),
-                "description": base_desc
+                # Black background applied to 2nd/3rd place names
+                "description": f"{medals[i]} `{name}`\n\n{base_desc}"
             }
         embeds_list.append(embed)
 
@@ -118,7 +116,6 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
     others = [f"**{it['name']}** (+{it['gain']:,} XP)" for it in ranking[3:] if it['gain'] > 0]
     
     streak_legend = "Streaks: 1-4 🔥 5+ 👑"
-    # Adjusted formatting for new lines
     footer_text = f"Total: {team_total:,} XP | World: {WORLD}\n{streak_info_part}{streak_legend}\n⚠️ Only Top 1000 can be tracked"
     
     footer_embed = {"color": CLR_MAIN, "footer": {"text": footer_text}}
