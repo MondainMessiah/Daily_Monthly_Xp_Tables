@@ -31,7 +31,7 @@ def load_json(path, fallback=None):
             data = json.load(f)
             return data if data else (fallback if fallback is not None else {})
     except Exception as e:
-        print(f"⚠️ Warning: Could not read {path.name} ({e}). using fallback.")
+        print(f"⚠️ Warning: Could not read {path.name} ({e}).")
         return fallback if fallback is not None else {}
 
 def save_json(path, data):
@@ -83,11 +83,14 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
 
     for i, item in enumerate(ranking[:3]):
         name, gain, rank = item['name'], item['gain'], item.get('rank', '???')
+        move = item.get('move', '⏺️')
         pct = int((gain / max_gain) * 100) if max_gain > 0 else 0
         s = streak_text if i == 0 and post_type == "daily" else ""
+        move_str = f" ({move})" if move != "⏺️" else ""
+        
         fields.append({
             "name": f"{medals[i]} **{name}**{s}", 
-            "value": f"🌍 World Rank: #{rank}\n`+{gain:,} XP` earned\n{make_bar(gain, max_gain)} `{pct}%`"
+            "value": f"🌍 World Rank: #{rank}{move_str}\n`+{gain:,} XP` earned\n{make_bar(gain, max_gain)} `{pct}%`"
         })
 
     others = [f"**{it['name']}** (+{it['gain']:,} XP)" for it in ranking[3:] if it['gain'] > 0]
@@ -138,23 +141,28 @@ def main():
             items = data.get("highscores", {}).get("highscore_list", [])
             for entry in items:
                 name = entry.get("name")
-                # Case-insensitive check
                 if name and any(name.lower() == c.lower() for c in chars):
                     curr_xp, curr_rank = entry.get("value", 0), int(entry.get("rank", 0))
                     
-                    # Normalize last entry
                     last_entry = totals.get(name, {"xp": 0, "rank": curr_rank})
                     if isinstance(last_entry, (int, float)): last_entry = {"xp": last_entry, "rank": curr_rank}
                     
-                    gain = curr_xp - last_entry.get("xp", 0) if last_entry.get("xp", 0) > 0 else 0
-                    api_ranks.append({"name": name, "gain": gain, "rank": curr_rank})
+                    last_xp, last_rank = last_entry.get("xp", 0), last_entry.get("rank", curr_rank)
+                    
+                    # Calculate Move
+                    if curr_rank < last_rank: move = f"🔼 {last_rank - curr_rank}"
+                    elif curr_rank > last_rank: move = f"🔽 {curr_rank - last_rank}"
+                    else: move = "⏺️"
+
+                    gain = curr_xp - last_xp if last_xp > 0 else 0
+                    api_ranks.append({"name": name, "gain": gain, "rank": curr_rank, "move": move})
                     
                     if gain > 0:
                         if name not in logs: logs[name] = {}
                         logs[name][yest] = f"+{gain:,}"
-                        print(f"   📈 {name}: +{gain:,} XP")
+                        print(f"   📈 {name}: +{gain:,} XP (Rank #{curr_rank})")
                     
-                    current_stats[name] = {"xp": curr_xp, "rank": curr_rank}
+                    current_stats[name] = {"xp": curr_xp, "rank": curr_rank, "move": move}
                     found_count += 1
         except Exception as e:
             print(f"   ⚠️ API Error on page {page}: {e}")
@@ -168,19 +176,25 @@ def main():
     print(f"❓ Checking Daily Post for {yest}...")
     if state.get("last_daily") != yest:
         daily_list = [x for x in api_ranks if x['gain'] > 0]
+        
         if not daily_list:
-            print("📦 API gain was 0. Checking logs for manual entries...")
+            print(f"📦 API gain was 0. Checking manual log for {yest}...")
+            lower_logs = {k.lower(): v for k, v in logs.items()}
+            
             for name in chars:
-                val = parse_xp(logs.get(name, {}).get(yest, 0))
+                char_log = lower_logs.get(name.lower(), {})
+                val = parse_xp(char_log.get(yest, 0))
                 if val > 0:
-                    daily_list.append({"name": name, "gain": val, "rank": current_stats.get(name, {}).get("rank", "???")})
+                    print(f"   📖 Found manual entry for {name}: {val:,} XP")
+                    stats = current_stats.get(name, {"rank": "???", "move": "⏺️"})
+                    daily_list.append({"name": name, "gain": val, "rank": stats.get("rank", "???"), "move": stats.get("move", "⏺️")})
         
         if daily_list:
             daily_list.sort(key=lambda x: x['gain'], reverse=True)
             send_discord_post("Daily Champion", yest, daily_list, sum(x['gain'] for x in daily_list), "daily")
             state["last_daily"] = yest
         else:
-            print("⏭️ No data found to post.")
+            print(f"⏭️ No data found for {yest} in logs.")
     else:
         print("⏭️ Daily already posted.")
 
@@ -192,7 +206,8 @@ def main():
         for name in chars:
             w_sum = sum(parse_xp(logs.get(name, {}).get(d, 0)) for d in last_7)
             if w_sum > 0:
-                weekly_list.append({"name": name, "gain": w_sum, "rank": current_stats.get(name, {}).get("rank", "???")})
+                stats = current_stats.get(name, {"rank": "???"})
+                weekly_list.append({"name": name, "gain": w_sum, "rank": stats.get("rank", "???")})
         if weekly_list:
             weekly_list.sort(key=lambda x: x['gain'], reverse=True)
             send_discord_post("Weekly Champion", f"Week ending {yest}", weekly_list, sum(x['gain'] for x in weekly_list), "weekly")
@@ -206,7 +221,8 @@ def main():
         for name in chars:
             m_sum = sum(parse_xp(v) for d, v in logs.get(name, {}).items() if d.startswith(target_month))
             if m_sum > 0:
-                monthly_list.append({"name": name, "gain": m_sum, "rank": current_stats.get(name, {}).get("rank", "???")})
+                stats = current_stats.get(name, {"rank": "???"})
+                monthly_list.append({"name": name, "gain": m_sum, "rank": stats.get("rank", "???")})
         if monthly_list:
             monthly_list.sort(key=lambda x: x['gain'], reverse=True)
             send_discord_post("Monthly Champion", (dates['obj'] - timedelta(days=1)).strftime("%B %Y"), monthly_list, sum(x['gain'] for x in monthly_list), "monthly")
