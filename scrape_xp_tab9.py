@@ -1,108 +1,168 @@
-import os, json, requests, time, re
+import os, json, requests
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 # --- CONFIG ---
 BASE_DIR = Path(__file__).resolve().parent
 CHAR_FILE = BASE_DIR / "characters.txt"
+LOG_PATH = BASE_DIR / "xp_log.json"
 TOTALS_PATH = BASE_DIR / "xp_totals.json"
+STATE_PATH = BASE_DIR / "post_state.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
 WORLD = "Celesta"
+TIMEZONE = "Europe/London"
 
-def scrape_tibia_highscore(world, voc_id, page):
-    """Scrapes the official Tibia.com highscores with high resilience."""
-    url = f"https://www.tibia.com/community/?subtopic=highscores&world={world}&category=6&vocation={voc_id}&currentpage={page}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
+def get_dates():
+    tz = ZoneInfo(TIMEZONE)
+    now = datetime.now(tz)
+    return {
+        "today": now.strftime("%Y-%m-%d"),
+        "yesterday": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
+    }
+
+def load_json(path, fallback=None):
+    if not path.exists(): return fallback if fallback is not None else {}
     try:
-        r = requests.get(url, headers=headers, timeout=20)
-        if r.status_code != 200: return []
-        
-        # This regex is broader to catch names and XP even if the HTML structure shifts
-        # It looks for the Name link and then jumps to the XP column (3 cells away)
-        pattern = r'name=(.*?)">(.*?)</a></td>.*?</td>.*?</td><td>([\d,]+)</td>'
-        matches = re.findall(pattern, r.text)
-        
-        results = []
-        for m in matches:
-            # Clean up HTML entities like apostrophes in names
-            clean_name = m[1].replace('&#x27;', "'").replace('&nbsp;', ' ').strip()
-            xp_val = int(m[2].replace(',', ''))
-            results.append({"name": clean_name, "xp": xp_val})
-        return results
-    except Exception as e:
-        print(f"      ⚠️ Scrape error on ID {voc_id}: {e}")
-        return []
+        with open(path, "r") as f: return json.load(f)
+    except: return fallback if fallback is not None else {}
 
-def main():
-    if not CHAR_FILE.exists(): return
-    with open(CHAR_FILE) as f:
-        target_chars = [l.strip().lower() for l in f if l.strip()]
+def save_json(path, data):
+    with open(path, "w") as f: json.dump(data, f, indent=2)
+
+def parse_xp(val):
+    try: return int(str(val).replace(",", "").replace("+", "").strip())
+    except: return 0
+
+def make_bar(val, max_val):
+    if max_val <= 0: return "⬛" * 10
+    filled = round((val / max_val) * 10)
+    return "🟩" * filled + "⬛" * (10 - filled)
+
+# --- DISCORD POSTER ---
+def send_discord_post(title, date_label, ranking, team_total):
+    if not ranking: return
+    print(f"📡 Sending Discord Post for {date_label}...")
     
-    new_totals, found_names = {}, set()
-    print(f"📡 Scanning {WORLD} for {len(target_chars)} players...")
+    max_gain = ranking[0]['gain']
+    medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+    fields = []
+    
+    # Streak Logic
+    streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
+    winner = ranking[0]['name']
+    daily = streaks.get("daily", {"last_winner": "", "count": 0})
+    
+    if daily["last_winner"] == winner: daily["count"] += 1
+    else: daily["last_winner"], daily["count"] = winner, 1
+    
+    streaks["daily"] = daily
+    save_json(STREAKS_PATH, streaks)
+    icon = "👑" if daily['count'] >= 5 else "🔥"
+    
+    for i, item in enumerate(ranking[:3]):
+        name, gain, rank, move = item['name'], item['gain'], item['rank'], item['move']
+        pct = int((gain / max_gain) * 100) if max_gain > 0 else 0
+        s = f" {icon} `{daily['count']}`" if i == 0 else ""
+        
+        # Format the movement string
+        move_str = f" ({move})" if move != "⏺️" else ""
+        
+        fields.append({
+            "name": f"{medals[i]} **{name}**{s}", 
+            "value": f"🌍 **World Rank: #{rank}**{move_str}\n`+{gain:,} XP` earned\n{make_bar(gain, max_gain)} `{pct}%`"
+        })
 
-    # --- STEP 1: API GLOBAL SCAN (Top 1000 All) ---
-    print("🔍 [STEP 1] Checking Global API (Top 1000)...")
+    others = [f"**{it['name']}** (Rank #{it['rank']} | +{it['gain']:,} XP)" for it in ranking[3:] if it['gain'] > 0]
+    if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
+
+    payload = {
+        "embeds": [{
+            "title": f"🏆 {title} 🏆", 
+            "description": f"🗓️ Date: **{date_label}**", 
+            "fields": fields, 
+            "color": 0x2ecc71, 
+            "footer": {"text": f"Team Total: {team_total:,} XP | World: {WORLD}"}
+        }]
+    }
+    requests.post(os.environ.get("DISCORD_WEBHOOK_URL"), json=payload)
+
+# --- MAIN ---
+def main():
+    dates = get_dates()
+    yest = dates['yesterday']
+    print(f"🚀 Bot Running | Tracking {WORLD} Rank Movement")
+
+    logs = load_json(LOG_PATH)
+    totals = load_json(TOTALS_PATH)
+    state = load_json(STATE_PATH)
+    
+    if not CHAR_FILE.exists(): return
+    with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
+
+    new_ranks = []
+    found_count = 0
+    temp_data = {} # To map current stats
+    
+    # 1. SCAN API HIGHSCORES
     for page in range(1, 21):
-        if len(found_names) == len(target_chars): break
+        if found_count == len(chars): break
         url = f"https://api.tibiadata.com/v4/highscores/{WORLD}/experience/all/{page}"
         try:
-            r = requests.get(url, timeout=10); data = r.json()
+            r = requests.get(url, timeout=15)
+            data = r.json()
             items = data.get("highscores", {}).get("highscore_list", [])
-            if not items: break
             for entry in items:
                 name = entry.get("name")
-                if name and name.lower() in target_chars:
-                    xp = entry.get("value") or entry.get("experience") or 0
-                    new_totals[name] = xp
-                    found_names.add(name.lower())
-                    print(f"   ✅ API FOUND: {name} ({xp:,} XP)")
+                if name in chars:
+                    curr_xp = entry.get("value") or entry.get("experience") or 0
+                    curr_rank = int(entry.get("rank", 0))
+                    
+                    # Get last data (handling old format where it was just an int)
+                    last_entry = totals.get(name, {"xp": 0, "rank": 0})
+                    if isinstance(last_entry, int): last_entry = {"xp": last_entry, "rank": curr_rank}
+                    
+                    last_xp = last_entry.get("xp", 0)
+                    last_rank = last_entry.get("rank", curr_rank)
+
+                    # Calculate movement
+                    if curr_rank < last_rank: move = f"🔼 {last_rank - curr_rank}"
+                    elif curr_rank > last_rank: move = f"🔽 {curr_rank - last_rank}"
+                    else: move = "⏺️"
+
+                    if last_xp > 0:
+                        gain = curr_xp - last_xp
+                        if gain >= 0:
+                            if name not in logs: logs[name] = {}
+                            logs[name][yest] = f"+{gain:,}"
+                            new_ranks.append({"name": name, "gain": gain, "rank": curr_rank, "move": move})
+                            print(f"✅ {name}: +{gain:,} XP (Rank #{curr_rank} {move})")
+                    
+                    temp_data[name] = {"xp": curr_xp, "rank": curr_rank}
+                    found_count += 1
         except: break
 
-    # --- STEP 2: BRUTE FORCE VOCATION SCRAPE (For the missing Monks) ---
-    missing = [c for c in target_chars if c not in found_names]
-    if missing:
-        print(f"🔍 [STEP 2] Brute-forcing Vocation IDs for {len(missing)} missing players...")
-        # We check IDs 1-12 to cover all possible new 2026 vocations
-        for voc_id in range(1, 13):
-            if all(m in found_names for m in missing): break
-            
-            print(f"   Checking Vocation ID: {voc_id} (Page 1)...")
-            results = scrape_tibia_highscore(WORLD, voc_id, 1)
-            
-            # Debug: print the first name found to see if we are in the right place
-            if results:
-                print(f"      (Sample name on ID {voc_id}: {results[0]['name']})")
-                
-            for res in results:
-                if res['name'].lower() in missing:
-                    new_totals[res['name']] = res['xp']
-                    found_names.add(res['name'].lower())
-                    print(f"   ✅ SCRAPE FOUND: {res['name']} ({res['xp']:,} XP)")
-            
-            time.sleep(1) # Be gentle with the website
+    # Update totals with the new dictionary format
+    totals.update(temp_data)
+    save_json(TOTALS_PATH, totals)
+    save_json(LOG_PATH, logs)
 
-    # --- SAVE & RECOVERY ---
-    if new_totals:
-        curr = {}
-        if TOTALS_PATH.exists():
-            try:
-                with open(TOTALS_PATH, "r") as f: curr = json.load(f)
-            except: pass
-        curr.update(new_totals)
-        with open(TOTALS_PATH, "w") as f: json.dump(curr, f, indent=2)
-        print(f"💾 Totals updated with {len(found_names)} players.")
-    
-    # Final cleanup of the streaks.json to remove those repeating lines
-    if STREAKS_PATH.exists():
-        try:
-            with open(STREAKS_PATH, "r") as f: s = json.load(f)
-            clean = {k: s.get(k, {"last_winner": "", "count": 0}) for k in ["daily", "weekly", "monthly"]}
-            with open(STREAKS_PATH, "w") as f: json.dump(clean, f, indent=2)
-        except: pass
+    # 2. POST DAILY RESULTS
+    if state.get("last_daily") != yest:
+        if not new_ranks:
+            for name in chars:
+                val = parse_xp(logs.get(name, {}).get(yest, 0))
+                if val > 0:
+                    d = temp_data.get(name, {"rank": "???", "move": "⏺️"})
+                    new_ranks.append({"name": name, "gain": val, "rank": d['rank'], "move": d['move']})
 
-    final_missing = [c for c in target_chars if c not in found_names]
-    if final_missing:
-        print(f"❌ Still missing after deep scan: {', '.join(final_missing)}")
+        if new_ranks:
+            new_ranks.sort(key=lambda x: x['gain'], reverse=True)
+            total_xp = sum(item['gain'] for item in new_ranks)
+            send_discord_post("Daily Champion", yest, new_ranks, total_xp)
+            state["last_daily"] = yest
+            save_json(STATE_PATH, state)
+            print("🎉 Success!")
 
 if __name__ == "__main__":
     main()
