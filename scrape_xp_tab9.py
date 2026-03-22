@@ -60,7 +60,8 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
     embeds_list = []
     max_gain = ranking[0]['gain']
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-    medal_colors = {0: CL_GOLD, 1: CL_SILVER, 2: CL_BRONZE}
+    # FIXED: Corrected CL_ to CLR_ to match definitions above
+    medal_colors = {0: CLR_GOLD, 1: CLR_SILVER, 2: CLR_BRONZE}
 
     # 1. HEADER BOX
     header_embed = {
@@ -80,7 +81,6 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
         # Check if streak is broken
         if s_data["last_winner"] != "" and s_data["last_winner"] != winner:
             if s_data["count"] >= 2:
-                # NEW RED EMBED FOR STREAK BREAKER
                 embeds_list.append({
                     "title": "⚔️ STREAK BROKEN ⚔️",
                     "description": f"**{winner}** has just ended **{s_data['last_winner']}'s** `{s_data['count']}` day winning streak!",
@@ -93,8 +93,6 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
             s_data["count"] += 1
         
         save_json(STREAKS_PATH, streaks)
-        
-        # Streak Icon Logic
         s_icon = "👑" if s_data['count'] >= 5 else "🔥"
         streak_footer_part = f" | Streak: {s_icon} {s_data['count']}"
 
@@ -113,8 +111,6 @@ def send_discord_post(title, date_label, ranking, team_total, post_type="daily")
 
     # 4. OTHER GAINS & FOOTER
     others = [f"**{it['name']}** (+{it['gain']:,} XP)" for it in ranking[3:] if it['gain'] > 0]
-    
-    # Updated Footer with Disclaimer and Streak
     footer_text = f"Total: {team_total:,} XP | World: {WORLD}{streak_footer_part}\n⚠️ Only players in Top 1000 can be tracked"
     
     footer_embed = {
@@ -174,7 +170,6 @@ def main():
 
     totals.update(current_stats); save_json(TOTALS_PATH, totals); save_json(LOG_PATH, logs)
 
-    # Check for Daily Post
     if state.get("last_daily") != yest:
         daily_list = [x for x in api_ranks if x['gain'] > 0]
         if not daily_list:
@@ -189,7 +184,6 @@ def main():
             send_discord_post("Daily Champion", yest, daily_list, sum(x['gain'] for x in daily_list), "daily")
             state["last_daily"] = yest
 
-    # Weekly Logic (Monday)
     if dates['is_monday'] and state.get("last_weekly") != yest:
         last_7 = [(dates['obj'] - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 8)]
         weekly_list = []
@@ -202,7 +196,6 @@ def main():
             send_discord_post("Weekly Champion", f"Week ending {yest}", weekly_list, sum(x['gain'] for x in weekly_list), "weekly")
             state["last_weekly"] = yest
 
-    # Monthly Logic (1st)
     if dates['is_first_of_month'] and state.get("last_monthly") != yest:
         m_label = (dates['obj'] - timedelta(days=1)).strftime("%Y-%m")
         monthly_list = []
