@@ -13,6 +13,13 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 WORLD = "Celesta"
 TIMEZONE = "Europe/London"
 
+# --- COLORS ---
+CLR_GOLD = 0xFFD700
+CLR_SILVER = 0xC0C0C0
+CLR_BRONZE = 0xCD7F32
+CLR_RED = 0xFF0000
+CLR_MAIN = 0x2ecc71 
+
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
@@ -30,19 +37,15 @@ def load_json(path, fallback=None):
         with open(path, "r") as f:
             data = json.load(f)
             return data if data else (fallback if fallback is not None else {})
-    except Exception as e:
-        print(f"⚠️ Warning: Could not read {path.name} ({e}).")
-        return fallback if fallback is not None else {}
+    except: return fallback if fallback is not None else {}
 
 def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
 def parse_xp(val):
-    try:
-        return int(str(val).replace(",", "").replace("+", "").strip())
-    except:
-        return 0
+    try: return int(str(val).replace(",", "").replace("+", "").strip())
+    except: return 0
 
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
@@ -52,87 +55,95 @@ def make_bar(val, max_val):
 # --- DISCORD POSTER ---
 def send_discord_post(title, date_label, ranking, team_total, post_type="daily"):
     print(f"📡 Posting {title} to Discord...")
-    if not ranking:
-        print("⚠️ No ranking data to post.")
-        return
+    if not ranking: return
     
+    embeds_list = []
     max_gain = ranking[0]['gain']
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-    fields = []
-    description = f"🗓️ Period: **{date_label}**"
-    
+    medal_colors = {0: CL_GOLD, 1: CL_SILVER, 2: CL_BRONZE}
+
+    # 1. HEADER BOX
+    header_embed = {
+        "title": f"🏆 {title} 🏆",
+        "description": f"🗓️ Period: **{date_label}**",
+        "color": CLR_MAIN
+    }
+    embeds_list.append(header_embed)
+
+    # 2. STREAK LOGIC
+    streak_footer_part = ""
     if post_type == "daily":
         streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
         winner = ranking[0]['name']
         s_data = streaks.get("daily", {"last_winner": "", "count": 0})
         
-        if s_data["last_winner"] == winner:
-            s_data["count"] += 1
-        else:
+        # Check if streak is broken
+        if s_data["last_winner"] != "" and s_data["last_winner"] != winner:
             if s_data["count"] >= 2:
-                description += f"\n\n⚔️ **{winner}** ended **{s_data['last_winner']}'s** `{s_data['count']}` day streak!"
+                # NEW RED EMBED FOR STREAK BREAKER
+                embeds_list.append({
+                    "title": "⚔️ STREAK BROKEN ⚔️",
+                    "description": f"**{winner}** has just ended **{s_data['last_winner']}'s** `{s_data['count']}` day winning streak!",
+                    "color": CLR_RED
+                })
             s_data["last_winner"] = winner
             s_data["count"] = 1
+        else:
+            s_data["last_winner"] = winner
+            s_data["count"] += 1
         
-        streaks["daily"] = s_data
         save_json(STREAKS_PATH, streaks)
-        icon = "👑" if s_data['count'] >= 5 else "🔥"
-        streak_text = f" {icon} `{s_data['count']}`"
-    else:
-        streak_text = ""
+        
+        # Streak Icon Logic
+        s_icon = "👑" if s_data['count'] >= 5 else "🔥"
+        streak_footer_part = f" | Streak: {s_icon} {s_data['count']}"
 
+    # 3. PLAYER CARDS
     for i, item in enumerate(ranking[:3]):
         name, gain, rank = item['name'], item['gain'], item.get('rank', '???')
         move = item.get('move', '⏺️')
         pct = int((gain / max_gain) * 100) if max_gain > 0 else 0
-        s = streak_text if i == 0 and post_type == "daily" else ""
         move_str = f" ({move})" if move != "⏺️" else ""
-        
-        fields.append({
-            "name": f"{medals[i]} **{name}**{s}", 
-            "value": f"🌍 World Rank: #{rank}{move_str}\n`+{gain:,} XP` earned\n{make_bar(gain, max_gain)} `{pct}%`"
+
+        embeds_list.append({
+            "author": {"name": f"{medals[i]} {name}"},
+            "description": f"🌍 **World Rank: #{rank}**{move_str}\n`+{gain:,} XP` earned\n{make_bar(gain, max_gain)} `{pct}%`",
+            "color": medal_colors.get(i, CLR_MAIN)
         })
 
+    # 4. OTHER GAINS & FOOTER
     others = [f"**{it['name']}** (+{it['gain']:,} XP)" for it in ranking[3:] if it['gain'] > 0]
-    if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
-
-    payload = {
-        "embeds": [{
-            "title": f"🏆 {title} 🏆", 
-            "description": description, 
-            "fields": fields, 
-            "color": 0x3498db if post_type != "daily" else 0x2ecc71, 
-            "footer": {"text": f"Team Total: {team_total:,} XP | World: {WORLD}"}
-        }]
+    
+    # Updated Footer with Disclaimer and Streak
+    footer_text = f"Total: {team_total:,} XP | World: {WORLD}{streak_footer_part}\n⚠️ Only players in Top 1000 can be tracked"
+    
+    footer_embed = {
+        "color": CLR_MAIN,
+        "footer": {"text": footer_text}
     }
+    
+    if others:
+        footer_embed["title"] = "--- Other Gains ---"
+        footer_embed["description"] = "\n".join(others)
+    else:
+        footer_embed["description"] = "No other significant gains today."
+
+    embeds_list.append(footer_embed)
+
+    payload = {"embeds": embeds_list}
     r = requests.post(os.environ.get("DISCORD_WEBHOOK_URL"), json=payload)
-    print(f"✅ Discord Response: {r.status_code}")
+    print(f"✅ Discord Status: {r.status_code}")
 
-# --- MAIN ---
+# --- MAIN ENGINE ---
 def main():
-    print("🚀 Starting Bot...")
-    dates = get_dates()
-    yest = dates['yesterday']
+    print("🚀 Starting Bot Engine...")
+    dates = get_dates(); yest = dates['yesterday']
+    logs = load_json(LOG_PATH); totals = load_json(TOTALS_PATH); state = load_json(STATE_PATH)
     
-    logs = load_json(LOG_PATH)
-    totals = load_json(TOTALS_PATH)
-    state = load_json(STATE_PATH)
+    if not CHAR_FILE.exists(): return
+    with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
     
-    if not CHAR_FILE.exists():
-        print("❌ Error: characters.txt not found!")
-        return
-        
-    with open(CHAR_FILE) as f:
-        chars = [l.strip() for l in f if l.strip()]
-    
-    print(f"📊 Tracking: {', '.join(chars)}")
-
-    # 1. API UPDATE
-    api_ranks = []
-    current_stats = {}
-    print(f"📡 Fetching {WORLD} Highscores...")
-    
-    found_count = 0
+    api_ranks = []; current_stats = {}; found_count = 0
     for page in range(1, 21):
         if found_count == len(chars): break
         try:
@@ -143,97 +154,69 @@ def main():
                 name = entry.get("name")
                 if name and any(name.lower() == c.lower() for c in chars):
                     curr_xp, curr_rank = entry.get("value", 0), int(entry.get("rank", 0))
-                    
                     last_entry = totals.get(name, {"xp": 0, "rank": curr_rank})
                     if isinstance(last_entry, (int, float)): last_entry = {"xp": last_entry, "rank": curr_rank}
                     
                     last_xp, last_rank = last_entry.get("xp", 0), last_entry.get("rank", curr_rank)
                     
-                    # Calculate Move
                     if curr_rank < last_rank: move = f"🔼 {last_rank - curr_rank}"
                     elif curr_rank > last_rank: move = f"🔽 {curr_rank - last_rank}"
                     else: move = "⏺️"
 
                     gain = curr_xp - last_xp if last_xp > 0 else 0
                     api_ranks.append({"name": name, "gain": gain, "rank": curr_rank, "move": move})
-                    
                     if gain > 0:
                         if name not in logs: logs[name] = {}
                         logs[name][yest] = f"+{gain:,}"
-                        print(f"   📈 {name}: +{gain:,} XP (Rank #{curr_rank})")
-                    
                     current_stats[name] = {"xp": curr_xp, "rank": curr_rank, "move": move}
                     found_count += 1
-        except Exception as e:
-            print(f"   ⚠️ API Error on page {page}: {e}")
-            break
+        except: break
 
-    totals.update(current_stats)
-    save_json(TOTALS_PATH, totals)
-    save_json(LOG_PATH, logs)
+    totals.update(current_stats); save_json(TOTALS_PATH, totals); save_json(LOG_PATH, logs)
 
-    # 2. DAILY POST
-    print(f"❓ Checking Daily Post for {yest}...")
+    # Check for Daily Post
     if state.get("last_daily") != yest:
         daily_list = [x for x in api_ranks if x['gain'] > 0]
-        
         if not daily_list:
-            print(f"📦 API gain was 0. Checking manual log for {yest}...")
-            lower_logs = {k.lower(): v for k, v in logs.items()}
-            
             for name in chars:
-                char_log = lower_logs.get(name.lower(), {})
-                val = parse_xp(char_log.get(yest, 0))
+                val = parse_xp(logs.get(name, {}).get(yest, 0))
                 if val > 0:
-                    print(f"   📖 Found manual entry for {name}: {val:,} XP")
-                    stats = current_stats.get(name, {"rank": "???", "move": "⏺️"})
-                    daily_list.append({"name": name, "gain": val, "rank": stats.get("rank", "???"), "move": stats.get("move", "⏺️")})
+                    st = current_stats.get(name, {"rank": "???", "move": "⏺️"})
+                    daily_list.append({"name": name, "gain": val, "rank": st['rank'], "move": st['move']})
         
         if daily_list:
             daily_list.sort(key=lambda x: x['gain'], reverse=True)
             send_discord_post("Daily Champion", yest, daily_list, sum(x['gain'] for x in daily_list), "daily")
             state["last_daily"] = yest
-        else:
-            print(f"⏭️ No data found for {yest} in logs.")
-    else:
-        print("⏭️ Daily already posted.")
 
-    # 3. WEEKLY (Mondays)
+    # Weekly Logic (Monday)
     if dates['is_monday'] and state.get("last_weekly") != yest:
-        print("📅 Processing Weekly Summary...")
         last_7 = [(dates['obj'] - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 8)]
         weekly_list = []
         for name in chars:
             w_sum = sum(parse_xp(logs.get(name, {}).get(d, 0)) for d in last_7)
             if w_sum > 0:
-                stats = current_stats.get(name, {"rank": "???"})
-                weekly_list.append({"name": name, "gain": w_sum, "rank": stats.get("rank", "???")})
+                weekly_list.append({"name": name, "gain": w_sum, "rank": current_stats.get(name, {}).get("rank", "???")})
         if weekly_list:
             weekly_list.sort(key=lambda x: x['gain'], reverse=True)
             send_discord_post("Weekly Champion", f"Week ending {yest}", weekly_list, sum(x['gain'] for x in weekly_list), "weekly")
             state["last_weekly"] = yest
 
-    # 4. MONTHLY (1st)
+    # Monthly Logic (1st)
     if dates['is_first_of_month'] and state.get("last_monthly") != yest:
-        print("📅 Processing Monthly Summary...")
-        target_month = (dates['obj'] - timedelta(days=1)).strftime("%Y-%m")
+        m_label = (dates['obj'] - timedelta(days=1)).strftime("%Y-%m")
         monthly_list = []
         for name in chars:
-            m_sum = sum(parse_xp(v) for d, v in logs.get(name, {}).items() if d.startswith(target_month))
+            m_sum = sum(parse_xp(v) for d, v in logs.get(name, {}).items() if d.startswith(m_label))
             if m_sum > 0:
-                stats = current_stats.get(name, {"rank": "???"})
-                monthly_list.append({"name": name, "gain": m_sum, "rank": stats.get("rank", "???")})
+                monthly_list.append({"name": name, "gain": m_sum, "rank": current_stats.get(name, {}).get("rank", "???")})
         if monthly_list:
             monthly_list.sort(key=lambda x: x['gain'], reverse=True)
             send_discord_post("Monthly Champion", (dates['obj'] - timedelta(days=1)).strftime("%B %Y"), monthly_list, sum(x['gain'] for x in monthly_list), "monthly")
             state["last_monthly"] = yest
 
     save_json(STATE_PATH, state)
-    print("🏁 Bot Finished.")
+    print("🏁 Job Complete.")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"💥 CRITICAL ERROR: {e}")
-        sys.exit(1)
+    main()
