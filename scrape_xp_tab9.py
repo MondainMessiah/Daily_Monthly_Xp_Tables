@@ -3,6 +3,7 @@ import json
 import requests
 import re
 import urllib.parse
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -16,37 +17,46 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ GUILDSTATS.EU SCRAPER (SHARPSHOOTER) 🛠️
+# 🛠️ GUILDSTATS.EU SCRAPER (STEALTH MODE) 🛠️
 # ==========================================
-def fetch_guildstats_gain(name, target_date):
+def fetch_guildstats_gain(session, name, target_date):
     """
-    Scans GuildStats for the specific date and grabs the XP from the next table cell.
-    Uses '+' for spaces in URLs.
+    Uses stealth headers and a persistent session to bypass 403 errors.
+    Targets the specific date and extracts the XP gain from the table.
     """
     formatted_name = name.replace(' ', '+')
     url = f"https://guildstats.eu/character?nick={formatted_name}"
     
+    # Browser-grade headers to look like a real Windows user
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
-        'Accept-Language': 'en-US,en;q=0.9'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://guildstats.eu/',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Cache-Control': 'max-age=0'
     }
     
     try:
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code != 200: 
-            print(f"⚠️ {name}: Site returned status {r.status_code}")
+        r = session.get(url, headers=headers, timeout=20)
+        
+        if r.status_code == 403:
+            print(f"❌ {name}: Blocked (403). GuildStats is detecting the script.")
+            return 0
+        elif r.status_code != 200:
+            print(f"⚠️ {name}: Site error {r.status_code}")
             return 0
         
         # SHARPSHOOTER REGEX:
-        # 1. Finds the target date (e.g., 2026-03-22)
-        # 2. Jumps to the next 'text-right' class (where XP gain numbers are stored)
-        # 3. Captures the number including +/- and commas.
+        # Targets the date, leaps to the next 'text-right' cell, captures the XP.
         pattern = rf"{target_date}.*?class=\"text-right.*?>\s*([+-]?[\d,]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
         if match:
             clean_val = match.group(1).replace(',', '').replace('+', '')
             return int(clean_val)
+            
         return 0
     except Exception as e:
         print(f"⚠️ Error scraping {name}: {e}")
@@ -85,20 +95,21 @@ def make_bar(val, max_val):
 # --- DISCORD POSTER ---
 def send_discord_post(title, date_label, ranking, team_total, team_change):
     if not ranking:
-        print("⚠️ Discord Post skipped: No players in ranking.")
+        print("⚠️ Skipping post: Ranking list is empty.")
         return
     
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook:
-        print("❌ ERROR: DISCORD_WEBHOOK_URL environment variable is missing!")
+        print("❌ Error: DISCORD_WEBHOOK_URL not found in environment.")
         return
 
     max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+    medal_colors = {0: 0xFFD700, 1: 0xC0C0C0, 2: 0xCD7F32} # Gold, Silver, Bronze
     fields = []
     description_addon = ""
 
-    # 1. PROCESS STREAKS
+    # 1. STREAKS
     streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
     winner_name = ranking[0][0]
     daily = streaks.get("daily", {"last_winner": "", "count": 0})
@@ -107,14 +118,14 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
         daily["count"] += 1
     else:
         if daily.get("last_winner") and daily.get("count", 0) >= 2:
-            description_addon = f"\n⚔️ **{winner_name}** has ended **{daily['last_winner']}'s** `{daily['count']}` day streak!"
+            description_addon = f"\n⚔️ **{winner_name}** ended **{daily['last_winner']}'s** `{daily['count']}` day streak!"
         daily["last_winner"], daily["count"] = winner_name, 1
     
     save_json(STREAKS_PATH, streaks)
     icon = "👑" if daily['count'] >= 5 else "🔥"
     streak_display = f" {icon} `{daily['count']}`"
 
-    # 2. BUILD TOP 3
+    # 2. TOP 3
     for i, (name, xp) in enumerate(ranking[:3]):
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         s = streak_display if i == 0 else ""
@@ -124,7 +135,7 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
             "inline": False
         })
 
-    # 3. OTHER GAINS
+    # 3. OTHERS
     others = [f"**{n}** (+{v:,} XP)" for n, v in ranking[3:10] if v > 0]
     if others:
         fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
@@ -143,11 +154,11 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
         }]
     }
     
-    resp = requests.post(webhook, json=payload)
-    if resp.status_code in [200, 204]:
-        print("🚀 Discord Post sent successfully!")
+    r = requests.post(webhook, json=payload)
+    if r.status_code in [200, 204]:
+        print("🚀 Discord post sent!")
     else:
-        print(f"❌ Failed to post: {resp.status_code} - {resp.text}")
+        print(f"❌ Discord error: {r.status_code}")
 
 # --- MAIN ENGINE ---
 def main():
@@ -156,27 +167,31 @@ def main():
     state = load_json(STATE_PATH)
     
     if not CHAR_FILE.exists():
-        print("❌ Error: characters.txt not found.")
+        print("❌ characters.txt is missing.")
         return
         
     with open(CHAR_FILE) as f: 
         chars = [l.strip() for l in f if l.strip()]
 
-    # --- STEP 1: FRESH SCRAPE (OVERRIDE LOCK) ---
+    # --- STEP 1: SCRAPE DATA ---
     print(f"🔍 Fetching gains for {dates['yesterday']}...")
-    for name in chars:
-        gain = fetch_guildstats_gain(name, dates['yesterday'])
-        
-        # Ensure the character has an entry in logs
-        if name not in logs: logs[name] = {}
-        
-        # Update if gain is found OR if we want to ensure zero activity is logged
-        if gain != 0:
-            logs[name][dates['yesterday']] = f"+{gain:,}" if gain > 0 else f"{gain:,}"
-            print(f"✅ {name}: {gain:,} XP (Scraped)")
-        else:
-            print(f"⚪ {name}: No update found on GuildStats for {dates['yesterday']}.")
     
+    # Using a Session is better for stealth
+    with requests.Session() as session:
+        for name in chars:
+            gain = fetch_guildstats_gain(session, name, dates['yesterday'])
+            
+            if name not in logs: logs[name] = {}
+            
+            if gain != 0:
+                logs[name][dates['yesterday']] = f"+{gain:,}" if gain > 0 else f"{gain:,}"
+                print(f"✅ {name}: {gain:,} XP")
+            else:
+                print(f"⚪ {name}: No update found.")
+            
+            # 3-second breathing room to avoid bot detection
+            time.sleep(3) 
+
     save_json(LOG_PATH, logs)
 
     # --- STEP 2: CALCULATE RANKINGS ---
@@ -194,13 +209,12 @@ def main():
         total_db += val_db
 
     if not rank_y: 
-        print(f"❌ No XP data found in logs for {dates['yesterday']}. Aborting post.")
+        print(f"❌ No XP data found for {dates['yesterday']}. Aborting post.")
         return
 
     rank_y.sort(key=lambda x: x[1], reverse=True)
 
     # --- STEP 3: POST TO DISCORD ---
-    # Only post if we haven't posted for this date yet
     if state.get("last_daily") != dates['yesterday']:
         change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
         send_discord_post("Daily Champion", dates['yesterday'], rank_y, total_y, change)
@@ -208,7 +222,7 @@ def main():
         state["last_daily"] = dates['yesterday']
         save_json(STATE_PATH, state)
     else:
-        print(f"⏭️ Skipping Discord post: Already posted for {dates['yesterday']}.")
+        print(f"⏭️ Already posted for {dates['yesterday']}.")
 
 if __name__ == "__main__":
     main()
