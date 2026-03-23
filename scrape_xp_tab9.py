@@ -17,13 +17,14 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE GUILDSTATS SURGEON (V22 - VISUAL MATCH)
+# 🛠️ THE GUILDSTATS TAILWIND SNIPER (V25)
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url: return "NO_URL"
 
     formatted_name = name.replace(' ', '+')
+    # Targeting the experience tab directly
     target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
     
@@ -31,10 +32,11 @@ def fetch_guildstats_gain(name, dates):
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # 1. SEARCH FOR THE DATE (MM-DD as seen in screenshot)
-        # We look for the date, then find the very first number with a + or - sign.
-        # This will skip the Level gain because the XP gain comes first in the row.
-        pattern = rf"{dates['yesterday_simple']}.*?([+-][\d,.]+)"
+        # --- THE TAILWIND SNIPER ---
+        # 1. Look for the ISO date (e.g., 2026-03-22)
+        # 2. Look for the next span with class 'text-green-400' or 'text-red-400'
+        # 3. Capture the XP inside that span
+        pattern = rf"{dates['yesterday_iso']}.*?text-(?:green|red)-400\">([+-][\d,.]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
         if match:
@@ -60,8 +62,7 @@ def get_dates():
     now = datetime.now(tz)
     yesterday_obj = now - timedelta(days=1)
     return {
-        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
-        "yesterday_simple": yesterday_obj.strftime("%m-%d"), # Matches "03-22" from screenshot
+        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"), # "2026-03-22"
         "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d")
     }
 
@@ -96,7 +97,6 @@ def send_discord_post(title, date_label, ranking, team_total):
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
     fields = []
     
-    # Simple Ranking
     for i, (name, xp) in enumerate(ranking[:3]):
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         fields.append({
@@ -117,7 +117,7 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Scraping GuildStats using visual match '{dates['yesterday_simple']}'...")
+    print(f"🌐 Running Tailwind Sniper for {dates['yesterday_iso']}...")
     
     success_count = 0
     for name in chars:
@@ -129,7 +129,7 @@ def main():
             success_count += 1
             time.sleep(2) 
         else:
-            print(f"⚪ {name}: No daily gain found.")
+            print(f"⚪ {name}: No valid daily gain found.")
 
     if success_count > 0:
         save_json(LOG_PATH, logs)
@@ -146,9 +146,9 @@ def main():
             send_discord_post("Daily Champion", dates['yesterday_iso'], rank_y, total_y)
             state["last_daily"] = dates['yesterday_iso']
             save_json(STATE_PATH, state)
-            print("🚀 Successfully updated and posted.")
+            print("🚀 Posted to Discord.")
     else:
-        print("⛔ Scrape failed to find gains. Verify the date in the table.")
+        print("⛔ No gains detected. Check the Bridge output if failures continue.")
 
 if __name__ == "__main__":
     main()
