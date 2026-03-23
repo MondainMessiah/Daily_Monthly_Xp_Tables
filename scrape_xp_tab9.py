@@ -17,36 +17,43 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE TIBIA-STATISTIC SNIPER (V19)
+# 🛠️ THE GUILDSTATS SURGEON (V21)
 # ==========================================
-def fetch_statistic_gain(name, dates):
-    """
-    Targets the specific JSON-style data block found in Tibia-Statistic HTML.
-    """
+def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url: return "NO_URL"
 
-    formatted_name = urllib.parse.quote(name.lower())
-    target_url = f"https://www.tibia-statistic.com/statistics/players/{formatted_name}"
+    formatted_name = name.replace(' ', '+')
+    target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
     
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # --- THE JSON-KEY SNIPER ---
-        # Matches the date (22.03) and then captures the number after "experienceGained":
-        # Handle both positive and negative (deaths)
-        day_dot_month = dates['yesterday_dot'] 
-        pattern = rf"{day_dot_month}.*?experienceGained\":\s*(-?\d+)"
-        match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
+        # 1. FIND THE ROW: Anchor to the specific date cell
+        # GuildStats uses DD-MM-YYYY (e.g., 22-03-2026)
+        date_pattern = rf"<td>\s*{dates['yesterday_gs']}\s*</td>"
+        row_match = re.search(rf"{date_pattern}.*?</tr>", r.text, re.IGNORECASE | re.DOTALL)
         
-        if match:
-            val = int(match.group(1))
-            # Safety Valve: Ignore glitch numbers > 1 billion
-            if abs(val) > 1000000000: return 0 
-            return val
+        if row_match:
+            row_html = row_match.group(0)
             
+            # 2. EXTRACT GAIN: Look for the + or - inside that specific row
+            # We skip the first number (Level) and grab the one with the sign
+            gain_match = re.search(r"([+-][\d,.]+)", row_html)
+            
+            if gain_match:
+                raw_val = gain_match.group(1)
+                is_neg = '-' in raw_val
+                clean_val = "".join(c for c in raw_val if c.isdigit())
+                
+                if clean_val:
+                    val = int(clean_val)
+                    # SAFETY LIMIT: Prevent "Hex Good" glitch (500kk cap)
+                    if val > 500000000: return 0 
+                    return -val if is_neg else val
+        
         return 0
     except Exception as e:
         print(f"⚠️ {name} Scrape Error: {e}")
@@ -59,8 +66,8 @@ def get_dates():
     now = datetime.now(tz)
     yesterday_obj = now - timedelta(days=1)
     return {
-        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"), 
-        "yesterday_dot": yesterday_obj.strftime("%d.%m"),    
+        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
+        "yesterday_gs": yesterday_obj.strftime("%d-%m-%Y"), # 22-03-2026
         "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d")
     }
 
@@ -122,16 +129,17 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Running V19 Sniper for {dates['yesterday_dot']}...")
+    print(f"🌐 Back to GuildStats for {dates['yesterday_gs']}...")
+    
     success_count = 0
     for name in chars:
-        gain = fetch_statistic_gain(name, dates)
+        gain = fetch_guildstats_gain(name, dates)
         if isinstance(gain, int) and gain != 0:
             if name not in logs: logs[name] = {}
             logs[name][dates['yesterday_iso']] = f"{gain:+,}"
             print(f"✅ {name}: {gain:+,} XP")
             success_count += 1
-            time.sleep(1.5) 
+            time.sleep(2) 
         else:
             print(f"⚪ {name}: No daily gain found.")
 
@@ -144,15 +152,16 @@ def main():
             y, db = parse_xp(h.get(dates['yesterday_iso'], 0)), parse_xp(h.get(dates['day_before_iso'], 0))
             if y != 0: rank_y.append((name, y))
             total_y += y; total_db += db
+
         if rank_y and state.get("last_daily") != dates['yesterday_iso']:
             rank_y.sort(key=lambda x: x[1], reverse=True)
             change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
             send_discord_post("Daily Champion", dates['yesterday_iso'], rank_y, total_y, change)
             state["last_daily"] = dates['yesterday_iso']
             save_json(STATE_PATH, state)
-            print("🚀 Process Complete.")
+            print("🚀 Posted to Discord.")
     else:
-        print("⛔ Scrape failed to extract XP gains. Ensure data exists on site.")
+        print("⛔ Scrape failed to find gains. Verify characters on GuildStats.eu.")
 
 if __name__ == "__main__":
     main()
