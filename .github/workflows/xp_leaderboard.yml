@@ -2,9 +2,10 @@ name: Tibia XP Tracker
 
 on:
   schedule:
-    # Runs at 09:45 UTC (09:15 AM UK) - The sweet spot after Server Save
+    # Runs at 09:45 UTC (09:45 AM UK) 
+    # This provides a 45-minute buffer after Server Save for GuildStats to update.
     - cron: '45 9 * * *'
-  workflow_dispatch: # Keeps the manual "Run" button active
+  workflow_dispatch: # Allows you to run the bot manually via the "Actions" tab
 
 permissions:
   contents: write
@@ -16,7 +17,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Speed up by only installing what we actually use
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -29,16 +29,20 @@ jobs:
 
       - name: Run XP Scraper Script
         env:
+          # These must match the names you saved in GitHub Repo Secrets
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GOOGLE_BRIDGE_URL: ${{ secrets.GOOGLE_BRIDGE_URL }}
         run: python scrape_xp_tab9.py
 
       - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          # This catches logs, totals, streaks, and state files
-          git add *.json 
           
+          # Add all JSON files that the script might have updated
+          git add xp_log.json post_state.json streaks.json xp_totals.json
+          
+          # Only commit if there are actually changes to the data
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "🤖 Auto-update XP logs and streaks [skip ci]"
             git push
