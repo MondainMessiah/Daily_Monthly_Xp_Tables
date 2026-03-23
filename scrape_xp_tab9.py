@@ -17,7 +17,7 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE GOOGLE BRIDGE SCRAPER (V9 SNIPER)
+# 🛠️ THE GOOGLE BRIDGE SCRAPER (V10 DEBUG)
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
@@ -31,31 +31,37 @@ def fetch_guildstats_gain(name, dates):
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # --- THE SNIPER LOGIC ---
-        # 1. Find the date (e.g., 22-03-2026).
-        # 2. Look for the next '</td>' to make sure we are OUTSIDE the date cell.
-        # 3. Look for the very next sequence that starts with + or - and has numbers.
-        # This ignores the 'Level' column entirely because levels don't have + or - signs.
-        pattern = rf"{dates['yesterday_gs']}</td>.*?([+-][\d,.]+)"
+        # --- THE V10 "ULTRA-FLEX" REGEX ---
+        # It finds the date, then skips until the first [+] or [-].
+        # It now accounts for hidden spaces and HTML tags like <span>.
+        pattern = rf"{dates['yesterday_gs']}.*?([+-][\d,.\s\xa0]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
-        # Try short date (22-03) if long date fails
         if not match:
-            pattern = rf"{dates['yesterday_gs_short']}</td>.*?([+-][\d,.]+)"
+            # Try short date format
+            pattern = rf"{dates['yesterday_gs_short']}.*?([+-][\d,.\s\xa0]+)"
             match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
 
         if match:
             raw_val = match.group(1)
             is_negative = '-' in raw_val
+            # Strip EVERYTHING that isn't a digit
             clean_val = "".join(c for c in raw_val if c.isdigit())
             
             if clean_val:
                 val = int(clean_val)
-                # Emergency Brake: ignore impossible Tibia numbers
                 if val > 1000000000: return 0 
                 return -val if is_negative else val
         
-        # If we still find 0, the date might not be in the table yet.
+        # --- DEBUG VISION ---
+        # If we hit 0, let's see what the HTML actually looks like around the date
+        date_pos = r.text.find(dates['yesterday_gs'])
+        if date_pos != -1:
+            snippet = r.text[date_pos:date_pos+150].replace('\n', ' ')
+            print(f"🔍 DEBUG [{name}]: Bot sees this after date -> {snippet}")
+        else:
+            print(f"🔍 DEBUG [{name}]: Date {dates['yesterday_gs']} NOT FOUND in HTML.")
+
         return 0
     except Exception as e:
         print(f"⚠️ {name} Scrape Error: {e}")
@@ -67,11 +73,10 @@ def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
     yesterday_obj = now - timedelta(days=1)
-    
     return {
         "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
-        "yesterday_gs": yesterday_obj.strftime("%d-%m-%Y"),       # 22-03-2026
-        "yesterday_gs_short": yesterday_obj.strftime("%d-%m"),   # 22-03
+        "yesterday_gs": yesterday_obj.strftime("%d-%m-%Y"),       
+        "yesterday_gs_short": yesterday_obj.strftime("%d-%m"),   
         "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d")
     }
 
@@ -100,76 +105,46 @@ def make_bar(val, max_val):
     filled = max(0, min(10, filled))
     return "🟩" * filled + "⬛" * (10 - filled)
 
-# --- DISCORD POSTER ---
 def send_discord_post(title, date_label, ranking, team_total, team_change):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook or not ranking: return
-
     max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
     fields = []
-    
     streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
     winner_name = ranking[0][0]
     daily = streaks.get("daily", {"last_winner": "", "count": 0})
-    desc_addon = ""
-
     if daily.get("last_winner") == winner_name:
         daily["count"] += 1
     else:
-        if daily.get("last_winner") and daily.get("count", 0) >= 2:
-            desc_addon = f"\n⚔️ **{winner_name}** ended **{daily['last_winner']}'s** `{daily['count']}` day streak!"
         daily["last_winner"], daily["count"] = winner_name, 1
-    
     save_json(STREAKS_PATH, streaks)
     icon = "👑" if daily['count'] >= 5 else "🔥"
-    streak_label = f" {icon} `{daily['count']}`"
-
     for i, (name, xp) in enumerate(ranking[:3]):
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
-        s = streak_label if i == 0 else ""
-        fields.append({
-            "name": f"{medals[i]} **{name}**{s}",
-            "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
-            "inline": False
-        })
-
+        fields.append({"name": f"{medals[i]} **{name}** {icon} `{daily['count']}`" if i==0 else f"{medals[i]} **{name}**",
+                       "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`", "inline": False})
     others = [f"**{n}** ({v:+,} XP)" for n, v in ranking[3:10] if v != 0]
     if others: fields.append({"name": "--- Others ---", "value": "\n".join(others)})
-
-    payload = {
-        "embeds": [{
-            "title": f"🏆 {title} 🏆",
-            "description": f"🗓️ Date: **{date_label}**{desc_addon}",
-            "fields": fields,
-            "color": 0x2ecc71,
-            "footer": {"text": f"Total: {team_total:,} XP ({team_change})\n🔥 = 1-4 Streak | 👑 = 5+ Streak"}
-        }]
-    }
+    payload = {"embeds": [{"title": f"🏆 {title} 🏆", "description": f"🗓️ Date: **{date_label}**", "fields": fields, "color": 0x2ecc71, "footer": {"text": f"Total: {team_total:,} XP ({team_change})" }}]}
     requests.post(webhook, json=payload)
 
-# --- MAIN ENGINE ---
 def main():
     dates = get_dates()
-    logs = load_json(LOG_PATH)
-    state = load_json(STATE_PATH)
-    
+    logs, state = load_json(LOG_PATH), load_json(STATE_PATH)
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Sniper Scraping (V9) for {dates['yesterday_gs']}...")
-    
+    print(f"🌐 Running V10 Sniper for {dates['yesterday_gs']}...")
     success_count = 0
     for name in chars:
         gain = fetch_guildstats_gain(name, dates)
-        
         if isinstance(gain, int):
             if name not in logs: logs[name] = {}
-            # Update the log with the result
             logs[name][dates['yesterday_iso']] = f"{gain:+,}"
             print(f"✅ {name}: {gain:+,} XP")
             if gain != 0: success_count += 1
-            time.sleep(2) 
+            time.sleep(1)
         elif gain == "NO_URL": return
 
     if success_count > 0:
@@ -178,20 +153,17 @@ def main():
         total_y, total_db = 0, 0
         for name in chars:
             h = logs.get(name, {})
-            y = parse_xp(h.get(dates['yesterday_iso'], 0))
-            db = parse_xp(h.get(dates['day_before_iso'], 0))
+            y, db = parse_xp(h.get(dates['yesterday_iso'], 0)), parse_xp(h.get(dates['day_before_iso'], 0))
             if y != 0: rank_y.append((name, y))
             total_y += y; total_db += db
-
         if rank_y and state.get("last_daily") != dates['yesterday_iso']:
             rank_y.sort(key=lambda x: x[1], reverse=True)
             change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
             send_discord_post("Daily Champion", dates['yesterday_iso'], rank_y, total_y, change)
             state["last_daily"] = dates['yesterday_iso']
             save_json(STATE_PATH, state)
-            print("🚀 Process Complete.")
     else:
-        print("⛔ Scrape returned 0 for all characters. Data might not be updated yet.")
+        print("⛔ Scrape returned 0 for everyone. Check debug lines above.")
 
 if __name__ == "__main__":
     main()
