@@ -16,24 +16,38 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ GUILDSTATS.EU SCRAPER (HEAT-SEEKING) 🛠️
+# 🛠️ GUILDSTATS.EU SCRAPER (SHARPSHOOTER) 🛠️
 # ==========================================
 def fetch_guildstats_gain(name, target_date):
-    url = f"https://guildstats.eu/character?nick={urllib.parse.quote(name)}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
+    """
+    Scans GuildStats for the specific date and grabs the XP from the next table cell.
+    Uses '+' for spaces in URLs.
+    """
+    formatted_name = name.replace(' ', '+')
+    url = f"https://guildstats.eu/character?nick={formatted_name}"
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+        'Accept-Language': 'en-US,en;q=0.9'
+    }
+    
     try:
         r = requests.get(url, headers=headers, timeout=15)
         if r.status_code != 200: 
+            print(f"⚠️ {name}: Site returned status {r.status_code}")
             return 0
         
-        # HEAT-SEEKING REGEX
-        # Finds the date, jumps over HTML, grabs the number
-        pattern = rf"{target_date}.*?([+-]?[\d,]+)"
-        match = re.search(pattern, r.text, re.DOTALL)
+        # SHARPSHOOTER REGEX:
+        # 1. Finds the target date (e.g., 2026-03-22)
+        # 2. Jumps to the next 'text-right' class (where XP gain numbers are stored)
+        # 3. Captures the number including +/- and commas.
+        pattern = rf"{target_date}.*?class=\"text-right.*?>\s*([+-]?[\d,]+)"
+        match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
         if match:
             clean_val = match.group(1).replace(',', '').replace('+', '')
             return int(clean_val)
+        return 0
     except Exception as e:
         print(f"⚠️ Error scraping {name}: {e}")
     return 0
@@ -130,10 +144,10 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
     }
     
     resp = requests.post(webhook, json=payload)
-    if resp.status_code == 204 or resp.status_code == 200:
+    if resp.status_code in [200, 204]:
         print("🚀 Discord Post sent successfully!")
     else:
-        print(f"❌ Failed to post to Discord: {resp.status_code} - {resp.text}")
+        print(f"❌ Failed to post: {resp.status_code} - {resp.text}")
 
 # --- MAIN ENGINE ---
 def main():
@@ -152,15 +166,16 @@ def main():
     print(f"🔍 Fetching gains for {dates['yesterday']}...")
     for name in chars:
         gain = fetch_guildstats_gain(name, dates['yesterday'])
+        
+        # Ensure the character has an entry in logs
         if name not in logs: logs[name] = {}
         
-        # Always update the log with what we find on GuildStats
+        # Update if gain is found OR if we want to ensure zero activity is logged
         if gain != 0:
-            logs[name][dates['yesterday']] = f"+{gain:,}"
+            logs[name][dates['yesterday']] = f"+{gain:,}" if gain > 0 else f"{gain:,}"
             print(f"✅ {name}: {gain:,} XP (Scraped)")
         else:
-            # If we find nothing, don't overwrite if there's already data there
-            print(f"⚪ {name}: No update found on GuildStats.")
+            print(f"⚪ {name}: No update found on GuildStats for {dates['yesterday']}.")
     
     save_json(LOG_PATH, logs)
 
@@ -179,20 +194,21 @@ def main():
         total_db += val_db
 
     if not rank_y: 
-        print(f"❌ No XP data found in logs for {dates['yesterday']}. Post aborted.")
+        print(f"❌ No XP data found in logs for {dates['yesterday']}. Aborting post.")
         return
 
     rank_y.sort(key=lambda x: x[1], reverse=True)
 
     # --- STEP 3: POST TO DISCORD ---
-    # To force a post for testing, you can comment out the 'if' line below:
-    # if state.get("last_daily") != dates['yesterday']:
-    
-    change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
-    send_discord_post("Daily Champion", dates['yesterday'], rank_y, total_y, change)
-    
-    state["last_daily"] = dates['yesterday']
-    save_json(STATE_PATH, state)
+    # Only post if we haven't posted for this date yet
+    if state.get("last_daily") != dates['yesterday']:
+        change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
+        send_discord_post("Daily Champion", dates['yesterday'], rank_y, total_y, change)
+        
+        state["last_daily"] = dates['yesterday']
+        save_json(STATE_PATH, state)
+    else:
+        print(f"⏭️ Skipping Discord post: Already posted for {dates['yesterday']}.")
 
 if __name__ == "__main__":
     main()
