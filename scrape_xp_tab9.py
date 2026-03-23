@@ -17,9 +17,9 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE GOOGLE BRIDGE SCRAPER (V6 SNIPER)
+# 🛠️ THE GOOGLE BRIDGE SCRAPER (V7 UNIVERSAL)
 # ==========================================
-def fetch_guildstats_gain(name, target_date_gs):
+def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url: return "NO_URL"
 
@@ -30,24 +30,27 @@ def fetch_guildstats_gain(name, target_date_gs):
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
-
-        # SNIPER V6 REGEX:
-        # 1. Matches the date (DD-MM-YYYY).
-        # 2. Skips characters (including span tags) until it hits the XP signature.
-        # 3. Specifically looks for + or - followed by numbers/commas/dots.
-        pattern = rf"{target_date_gs}.*?>\s*([+-][\d,.]+)"
-        match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
-        if match:
-            raw_val = match.group(1)
-            is_negative = '-' in raw_val
-            # Strip EVERYTHING except digits
-            clean_val = "".join(c for c in raw_val if c.isdigit())
+        # We try two date formats: "22-03-2026" and "22-03"
+        formats_to_try = [dates['yesterday_gs'], dates['yesterday_gs_short']]
+        
+        for d_str in formats_to_try:
+            # THE UNIVERSAL REGEX:
+            # Find the date string, skip everything (.*?) until the first [+] or [-] 
+            # followed by numbers/commas/dots.
+            pattern = rf"{d_str}.*?([+-][\d,.]+)"
+            match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
             
-            if not clean_val: return 0
-            val = int(clean_val)
-            return -val if is_negative else val
-            
+            if match:
+                raw_val = match.group(1)
+                is_negative = '-' in raw_val
+                clean_val = "".join(c for c in raw_val if c.isdigit())
+                
+                if clean_val:
+                    val = int(clean_val)
+                    return -val if is_negative else val
+        
+        # DEBUG: If it still finds 0, it means the date format on the site is weird.
         return 0
     except Exception as e:
         print(f"⚠️ {name} Scrape Error: {e}")
@@ -62,7 +65,8 @@ def get_dates():
     
     return {
         "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
-        "yesterday_gs": yesterday_obj.strftime("%d-%m-%Y"),
+        "yesterday_gs": yesterday_obj.strftime("%d-%m-%Y"),       # 22-03-2026
+        "yesterday_gs_short": yesterday_obj.strftime("%d-%m"),   # 22-03
         "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d")
     }
 
@@ -148,17 +152,19 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Sniper Scraping for {dates['yesterday_gs']}...")
+    print(f"🌐 Universal Scraping for {dates['yesterday_gs']}...")
     
     success_count = 0
     for name in chars:
-        gain = fetch_guildstats_gain(name, dates['yesterday_gs'])
+        # Pass the full dates dictionary to check multiple formats
+        gain = fetch_guildstats_gain(name, dates)
         
         if isinstance(gain, int):
             if name not in logs: logs[name] = {}
+            # Update the log with the result
             logs[name][dates['yesterday_iso']] = f"{gain:+,}"
             print(f"✅ {name}: {gain:+,} XP")
-            success_count += 1
+            if gain != 0: success_count += 1
             time.sleep(2) 
         elif gain == "NO_URL": return
 
@@ -181,7 +187,7 @@ def main():
             save_json(STATE_PATH, state)
             print("🚀 Successfully updated and posted.")
     else:
-        print("⛔ Scrape failed to find XP gains.")
+        print("⛔ No data found for the target date. Check the site manually.")
 
 if __name__ == "__main__":
     main()
