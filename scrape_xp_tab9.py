@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import re
-import time
+import urllib.parse
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -15,38 +15,49 @@ STATE_PATH = BASE_DIR / "post_state.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
-def fetch_guildstats_gain(session, name, target_date):
-    # CHANGED: Using the direct path URL format
+# ==========================================
+# 🛠️ THE GOOGLE BRIDGE SCRAPER (BYPASS 403) 🛠️
+# ==========================================
+def fetch_guildstats_gain(name, target_date):
+    """
+    Routes the request through a Google Apps Script Bridge.
+    Google's IP range is not blocked by Cloudflare/GuildStats.
+    """
+    bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
+    if not bridge_url:
+        print("❌ ERROR: GOOGLE_BRIDGE_URL secret is missing!")
+        return "NO_URL"
+
+    # Target the internal Experience tab directly
     formatted_name = name.replace(' ', '+')
-    url = f"https://guildstats.eu/character/{formatted_name}"
+    target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
     
-    # CHANGED: Mobile Safari headers (often bypasses basic Cloudflare IP blocks)
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-GB,en;q=0.9',
-        'Referer': 'https://guildstats.eu/',
-        'Connection': 'keep-alive'
-    }
+    # Construct the call to your Google Script
+    # Format: https://script.google.com/.../exec?url=https://guildstats.eu/...
+    encoded_target = urllib.parse.quote(target_url)
+    final_url = f"{bridge_url}?url={encoded_target}"
     
     try:
-        r = session.get(url, headers=headers, timeout=20)
+        r = requests.get(final_url, timeout=30)
         
-        if r.status_code == 403:
-            return "BLOCKED"
         if r.status_code != 200:
+            print(f"⚠️ Bridge Error for {name}: {r.status_code}")
             return "ERROR"
         
-        # Heat-Seeking Regex
-        pattern = rf"{target_date}.*?class=\"text-right.*?>\s*([+-]?[\d,]+)"
+        # HEAT-SEEKING REGEX
+        # Searches the HTML returned by Google for the target date and experience number
+        pattern = rf"{target_date}.*?>\s*([+-]?[\d,]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
         if match:
             clean_val = match.group(1).replace(',', '').replace('+', '')
             return int(clean_val)
         return 0
-    except:
+    except Exception as e:
+        print(f"⚠️ Request Error: {e}")
         return "ERROR"
+
+# ==========================================
 
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
@@ -84,7 +95,6 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
     fields = []
     
-    # Streaks
     streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
     winner_name = ranking[0][0]
     daily = streaks.get("daily", {"last_winner": "", "count": 0})
@@ -131,29 +141,21 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🔍 Fetching gains for {dates['yesterday']}...")
+    print(f"🌐 Using Google Bridge to fetch gains for {dates['yesterday']}...")
     
-    scrape_success = False
-    with requests.Session() as session:
-        for name in chars:
-            result = fetch_guildstats_gain(session, name, dates['yesterday'])
-            
+    success_count = 0
+    for name in chars:
+        result = fetch_guildstats_gain(name, dates['yesterday'])
+        
+        if isinstance(result, int):
             if name not in logs: logs[name] = {}
-            
-            if isinstance(result, int):
-                if result != 0:
-                    logs[name][dates['yesterday']] = f"+{result:,}"
-                    print(f"✅ {name}: {result:,} XP")
-                    scrape_success = True
-                else:
-                    print(f"⚪ {name}: No daily gain found.")
-            elif result == "BLOCKED":
-                print(f"❌ {name}: Blocked (403).")
-            
-            time.sleep(5) # Higher delay for stealth
+            logs[name][dates['yesterday']] = f"+{result:,}"
+            print(f"✅ {name}: {result:,} XP")
+            success_count += 1
+        elif result == "NO_URL": return
+        else: print(f"❌ {name}: Scrape failed through bridge.")
 
-    # ONLY SAVE AND POST IF AT LEAST ONE CHARACTER WAS SUCCESSFULLY SCRAPED
-    if scrape_success:
+    if success_count > 0:
         save_json(LOG_PATH, logs)
         
         rank_y = []
@@ -170,9 +172,9 @@ def main():
             send_discord_post("Daily Champion", dates['yesterday'], rank_y, total_y, change)
             state["last_daily"] = dates['yesterday']
             save_json(STATE_PATH, state)
-            print("🚀 Successfully updated and posted.")
+            print("🚀 Post complete.")
     else:
-        print("⛔ Aborting: No new data was scraped (IP block likely still active).")
+        print("⛔ No data scraped. Check if your Google Script URL is public.")
 
 if __name__ == "__main__":
     main()
