@@ -17,7 +17,7 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE GOOGLE BRIDGE SCRAPER (V11 X-RAY)
+# 🛠️ THE GOOGLE BRIDGE SCRAPER (V12 BIG FILTER)
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
@@ -31,28 +31,42 @@ def fetch_guildstats_gain(name, dates):
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # --- THE X-RAY SEARCH ---
-        # Instead of looking for a date, we look for the FIRST XP gain in the table.
-        # This is almost always 'Yesterday'.
-        # It looks for a [+] or [-] followed by digits and separators inside a cell.
-        pattern = r"([+-][\d,.]+)"
-        match = re.search(pattern, r.text)
-
-        if match:
-            raw_val = match.group(1)
-            is_negative = '-' in raw_val
-            clean_val = "".join(c for c in raw_val if c.isdigit())
+        # --- THE V12 "BIG NUMBER" REGEX ---
+        # 1. We look for the date (long or short format).
+        # 2. We search for ALL sequences starting with + or - after that date.
+        # 3. We pick the first one that is > 1000 or < -1000 to ignore noise like -6.
+        
+        search_start = r.text.find(dates['yesterday_gs'])
+        if search_start == -1:
+            search_start = r.text.find(dates['yesterday_gs_short'])
+        
+        if search_start != -1:
+            # Look at the HTML only AFTER the date was found
+            relevant_html = r.text[search_start:]
+            # Find all numbers with a + or - sign
+            matches = re.findall(r"([+-][\d,.]+)", relevant_html)
             
-            if clean_val:
+            for m in matches:
+                is_negative = '-' in m
+                clean_val = "".join(c for c in m if c.isdigit())
+                if not clean_val: continue
+                
                 val = int(clean_val)
-                # Ignore impossible numbers (over 1 billion)
-                if val > 1000000000: return 0 
-                return -val if is_negative else val
+                # FILTER: Real XP gains are usually large. 
+                # This ignores small noise like timezone '-6' or level digits.
+                if val > 1000:
+                    return -val if is_negative else val
         
-        # --- IF WE FAIL, SHOW THE BONES ---
-        print(f"🔍 DEBUG [{name}]: No XP signature found. Page start: {r.text[:300].strip()}")
+        # If no big number found after date, try one more 'desperation' search 
+        # for anything inside the color spans you provided.
+        span_match = re.search(r'text-(?:green|red)-\d+">([+-][\d,.]+)', r.text)
+        if span_match:
+            raw = span_match.group(1)
+            is_neg = '-' in raw
+            num = int("".join(c for c in raw if c.isdigit()))
+            if num > 1000: return -num if is_neg else num
+
         return 0
-        
     except Exception as e:
         print(f"⚠️ {name} Scrape Error: {e}")
         return 0
@@ -65,6 +79,8 @@ def get_dates():
     yesterday_obj = now - timedelta(days=1)
     return {
         "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
+        "yesterday_gs": yesterday_obj.strftime("%d-%m-%Y"),       
+        "yesterday_gs_short": yesterday_obj.strftime("%d-%m"),   
         "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d")
     }
 
@@ -82,7 +98,9 @@ def parse_xp(val):
         s = str(val).strip()
         is_neg = s.startswith('-')
         clean = "".join(c for c in s if c.isdigit())
-        return -int(clean) if is_neg and clean else int(clean) if clean else 0
+        if not clean: return 0
+        num = int(clean)
+        return -num if is_neg else num
     except: return 0
 
 def make_bar(val, max_val):
@@ -126,7 +144,7 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Running V11 X-Ray for {dates['yesterday_iso']}...")
+    print(f"🌐 Running V12 Deep Scan for {dates['yesterday_iso']}...")
     success_count = 0
     for name in chars:
         gain = fetch_guildstats_gain(name, dates)
@@ -137,7 +155,7 @@ def main():
             success_count += 1
             time.sleep(1)
         else:
-            print(f"⚪ {name}: No daily gain detected.")
+            print(f"⚪ {name}: Daily gain not detected.")
 
     if success_count > 0:
         save_json(LOG_PATH, logs)
@@ -156,7 +174,7 @@ def main():
             save_json(STATE_PATH, state)
             print("🚀 Successfully updated.")
     else:
-        print("⛔ Scrape failed for everyone. Check debug output.")
+        print("⛔ Scrape failed for everyone. Check if characters have gained XP today.")
 
 if __name__ == "__main__":
     main()
