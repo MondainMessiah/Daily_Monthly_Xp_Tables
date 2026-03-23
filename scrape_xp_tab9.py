@@ -17,32 +17,36 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE GOOGLE BRIDGE SCRAPER (V14 TIBIARING)
+# 🛠️ THE GOOGLE BRIDGE SCRAPER (V15 TIBIARISE)
 # ==========================================
-def fetch_tibiaring_gain(name, dates):
-    """
-    Scrapes TibiaRing via Google Bridge. 
-    Much cleaner table structure than GuildStats.
-    """
+def fetch_tibiarise_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url: return "NO_URL"
 
-    formatted_name = name.replace(' ', '+')
-    # TibiaRing shows a clear 30-day history on the main char page
-    target_url = f"https://www.tibiaring.com/char.php?c={formatted_name}"
+    # TibiaRise uses a standard URL structure
+    formatted_name = urllib.parse.quote(name)
+    target_url = f"https://tibiarise.app/character/{formatted_name}"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
     
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # --- THE TIBIARING SNIPER ---
-        # 1. Finds the date (YYYY-MM-DD format).
-        # 2. Skips the Level column.
-        # 3. Grabs the XP Gain column.
-        pattern = rf"{dates['yesterday_iso']}.*?<td>.*?</td>.*?<td>\s*([+-]?[\d,.]+)"
+        # --- THE TIBIARISE SNIPER ---
+        # TibiaRise usually lists history in a table.
+        # We look for 'Mar 22' or '22 Mar' or '2026-03-22'
+        # Then we find the first number with a + or - after it.
+        
+        # We try the ISO date first (2026-03-22)
+        pattern = rf"{dates['yesterday_iso']}.*?([+-][\d,.]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
+        # If that fails, TibiaRise sometimes uses "22 Mar" format
+        if not match:
+            day_month = dates['obj_yest'].strftime("%d %b") # e.g., "22 Mar"
+            pattern = rf"{day_month}.*?([+-][\d,.]+)"
+            match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
+
         if match:
             raw_val = match.group(1)
             is_negative = '-' in raw_val
@@ -50,10 +54,8 @@ def fetch_tibiaring_gain(name, dates):
             
             if clean_val:
                 val = int(clean_val)
-                # EMERGENCY BRAKE: No legit Tibia player gains 500kk+ in 24 hours.
-                if val > 500000000: 
-                    print(f"🛑 Error: {name} scraped impossible number ({val}). Filtered to 0.")
-                    return 0 
+                # Safety Valve
+                if val > 500000000: return 0 
                 return -val if is_negative else val
         
         return 0
@@ -68,8 +70,9 @@ def get_dates():
     now = datetime.now(tz)
     yesterday_obj = now - timedelta(days=1)
     return {
-        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"), # 2026-03-22
-        "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d")
+        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
+        "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
+        "obj_yest": yesterday_obj
     }
 
 def load_json(path, fallback=None):
@@ -88,8 +91,6 @@ def parse_xp(val):
         clean = "".join(c for c in s if c.isdigit())
         if not clean: return 0
         num = int(clean)
-        # Final safety check during parsing
-        if num > 500000000: return 0
         return -num if is_neg else num
     except: return 0
 
@@ -98,7 +99,6 @@ def make_bar(val, max_val):
     filled = max(0, min(10, round((val / max_val) * 10)))
     return "🟩" * filled + "⬛" * (10 - filled)
 
-# --- DISCORD POSTER ---
 def send_discord_post(title, date_label, ranking, team_total, team_change):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook or not ranking: return
@@ -107,7 +107,6 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
     fields = []
     
-    # STREAK LOGIC
     streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
     winner_name = ranking[0][0]
     daily = streaks.get("daily", {"last_winner": "", "count": 0})
@@ -120,7 +119,6 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
     save_json(STREAKS_PATH, streaks)
     icon = "👑" if daily['count'] >= 5 else "🔥"
 
-    # BUILD TOP 3
     for i, (name, xp) in enumerate(ranking[:3]):
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         s = f" {icon} `{daily['count']}`" if i == 0 else ""
@@ -130,9 +128,8 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
             "inline": False
         })
 
-    # OTHER GAINS
     others = [f"**{n}** ({v:+,} XP)" for n, v in ranking[3:10] if v != 0]
-    if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
+    if others: fields.append({"name": "--- Others ---", "value": "\n".join(others)})
 
     payload = {
         "embeds": [{
@@ -140,33 +137,31 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
             "description": f"🗓️ Date: **{date_label}**",
             "fields": fields,
             "color": 0x2ecc71,
-            "footer": {"text": f"Total: {team_total:,} XP ({team_change})\n🔥 = 1-4 Streak | 👑 = 5+ Streak"}
+            "footer": {"text": f"Total: {team_total:,} XP ({team_change})"}
         }]
     }
     requests.post(webhook, json=payload)
 
-# --- MAIN ENGINE ---
 def main():
     dates = get_dates()
     logs, state = load_json(LOG_PATH), load_json(STATE_PATH)
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Pivoting to TibiaRing for {dates['yesterday_iso']}...")
+    print(f"🌐 Moving to TibiaRise.app for {dates['yesterday_iso']}...")
     
     success_count = 0
     for name in chars:
-        # We use TibiaRing now!
-        gain = fetch_tibiaring_gain(name, dates)
+        gain = fetch_tibiarise_gain(name, dates)
         
         if isinstance(gain, int) and gain != 0:
             if name not in logs: logs[name] = {}
             logs[name][dates['yesterday_iso']] = f"{gain:+,}"
             print(f"✅ {name}: {gain:+,} XP")
             success_count += 1
-            time.sleep(1) # Gentle pacing for the bridge
+            time.sleep(1)
         else:
-            print(f"⚪ {name}: No daily gain found on TibiaRing.")
+            print(f"⚪ {name}: No daily gain found.")
 
     if success_count > 0:
         save_json(LOG_PATH, logs)
@@ -184,9 +179,9 @@ def main():
             send_discord_post("Daily Champion", dates['yesterday_iso'], rank_y, total_y, change)
             state["last_daily"] = dates['yesterday_iso']
             save_json(STATE_PATH, state)
-            print("🚀 TibiaRing Scrape & Post Complete.")
+            print("🚀 TibiaRise Scrape Complete.")
     else:
-        print("⛔ Scrape failed to find any valid gains on TibiaRing today.")
+        print("⛔ No gains found on TibiaRise for today.")
 
 if __name__ == "__main__":
     main()
