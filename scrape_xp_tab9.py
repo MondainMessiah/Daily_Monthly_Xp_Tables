@@ -17,59 +17,53 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE TIBIARISE BACKDOOR (V16)
+# 🛠️ THE TIBIA-STATISTIC SNIPER (V18)
 # ==========================================
-def fetch_tibiarise_gain(name, dates):
+def fetch_statistic_gain(name, dates):
     """
-    Targets the TibiaRise internal API to get clean JSON data.
-    This is immune to HTML changes and JavaScript loading issues.
+    Scrapes Tibia-Statistic.com via Google Bridge.
+    Targets the 'Daily Activity' table which uses the DD.MM format.
     """
-    # TibiaRise URL for character data
-    formatted_name = urllib.parse.quote(name)
-    # We use their public data endpoint
-    target_url = f"https://tibiarise.app/api/character/{formatted_name}"
-    
-    # We still use the bridge just in case of rate limits
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
-    if bridge_url:
-        final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
-    else:
-        final_url = target_url
+    if not bridge_url: return "NO_URL"
+
+    # Tibia-Statistic uses lowercase names with %20 for spaces
+    formatted_name = urllib.parse.quote(name.lower())
+    target_url = f"https://www.tibia-statistic.com/statistics/players/{formatted_name}"
+    final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
     
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # Try to parse as JSON first (Modern sites love JSON)
-        try:
-            data = r.json()
-            # Navigate TibiaRise's JSON structure for history
-            history = data.get("history", [])
-            for entry in history:
-                # Matches "2026-03-22"
-                if entry.get("date") == dates['yesterday_iso']:
-                    val = int(entry.get("exp_diff", 0))
-                    if 0 < val < 500000000: return val
-        except:
-            pass # Not JSON, fallback to Regex
-
-        # FALLBACK: If TibiaRise sends HTML, we look for the XP gain signature
-        # We look for the date followed by the very first + or - number
-        pattern = rf"{dates['yesterday_iso']}.*?([+-][\d,.]+)"
+        # --- THE STATISTIC SNIPER ---
+        # 1. Look for the date in DD.MM format (e.g., 22.03)
+        # 2. Skip any text (like '2h 15m') until we hit the [+] or [-] sign.
+        # 3. Capture the XP gain.
+        day_dot_month = dates['yesterday_dot'] # e.g., "22.03"
+        pattern = rf"{day_dot_month}.*?([+-][\d\s,.]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
-        if not match:
-            # Try "22 Mar" format
-            day_month = dates['obj_yest'].strftime("%d %b")
-            pattern = rf"{day_month}.*?([+-][\d,.]+)"
-            match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
-
         if match:
             raw_val = match.group(1)
-            is_neg = '-' in raw_val
-            num = int("".join(c for c in raw_val if c.isdigit()))
-            if 0 < num < 500000000: return -num if is_neg else num
+            is_negative = '-' in raw_val
+            # Clean: Remove everything except digits
+            clean_val = "".join(c for c in raw_val if c.isdigit())
+            
+            if clean_val:
+                val = int(clean_val)
+                # Safety Valve: Ignore glitch numbers > 1 billion
+                if val > 1000000000: return 0 
+                return -val if is_negative else val
         
+        # DEBUG: If 0, let's see what the bot is hitting
+        if name == "Hex Good": # Example debug for your problematic character
+            pos = r.text.find(day_dot_month)
+            if pos != -1:
+                print(f"🔍 DEBUG [Hex]: Found {day_dot_month}. Context: {r.text[pos:pos+100]}")
+            else:
+                print(f"🔍 DEBUG [Hex]: Date {day_dot_month} not found in HTML.")
+
         return 0
     except Exception as e:
         print(f"⚠️ {name} Scrape Error: {e}")
@@ -82,9 +76,9 @@ def get_dates():
     now = datetime.now(tz)
     yesterday_obj = now - timedelta(days=1)
     return {
-        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
-        "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
-        "obj_yest": yesterday_obj
+        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"), # 2026-03-22
+        "yesterday_dot": yesterday_obj.strftime("%d.%m"),    # 22.03
+        "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d")
     }
 
 def load_json(path, fallback=None):
@@ -117,6 +111,7 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
     max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
     fields = []
+    
     streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
     winner_name = ranking[0][0]
     daily = streaks.get("daily", {"last_winner": "", "count": 0})
@@ -126,12 +121,15 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
         daily["last_winner"], daily["count"] = winner_name, 1
     save_json(STREAKS_PATH, streaks)
     icon = "👑" if daily['count'] >= 5 else "🔥"
+
     for i, (name, xp) in enumerate(ranking[:3]):
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         s = f" {icon} `{daily['count']}`" if i == 0 else ""
         fields.append({"name": f"{medals[i]} **{name}**{s}", "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`", "inline": False})
+    
     others = [f"**{n}** ({v:+,} XP)" for n, v in ranking[3:10] if v != 0]
     if others: fields.append({"name": "--- Others ---", "value": "\n".join(others)})
+    
     payload = {"embeds": [{"title": f"🏆 {title} 🏆", "description": f"🗓️ Date: **{date_label}**", "fields": fields, "color": 0x2ecc71, "footer": {"text": f"Total: {team_total:,} XP ({team_change})" }}]}
     requests.post(webhook, json=payload)
 
@@ -141,16 +139,16 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Running TibiaRise Backdoor for {dates['yesterday_iso']}...")
+    print(f"🌐 Scraping Tibia-Statistic.com for {dates['yesterday_dot']}...")
     success_count = 0
     for name in chars:
-        gain = fetch_tibiarise_gain(name, dates)
+        gain = fetch_statistic_gain(name, dates)
         if isinstance(gain, int) and gain != 0:
             if name not in logs: logs[name] = {}
             logs[name][dates['yesterday_iso']] = f"{gain:+,}"
             print(f"✅ {name}: {gain:+,} XP")
             success_count += 1
-            time.sleep(1)
+            time.sleep(2) 
         else:
             print(f"⚪ {name}: No daily gain found.")
 
@@ -171,7 +169,7 @@ def main():
             save_json(STATE_PATH, state)
             print("🚀 Successfully updated and posted.")
     else:
-        print("⛔ Scrape returned 0 for everyone. Ensure characters are tracked on TibiaRise.app.")
+        print("⛔ Scrape returned 0 for everyone. Ensure characters have recent activity on Tibia-Statistic.")
 
 if __name__ == "__main__":
     main()
