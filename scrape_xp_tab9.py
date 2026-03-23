@@ -14,6 +14,7 @@ CHAR_FILE = BASE_DIR / "characters.txt"
 LOG_PATH = BASE_DIR / "xp_log.json"
 STATE_PATH = BASE_DIR / "post_state.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
+PB_PATH = BASE_DIR / "personal_bests.json" # <--- Your PB file
 TIMEZONE = "Europe/London"
 
 # ==========================================
@@ -28,7 +29,6 @@ def fetch_guildstats_gain(name, dates):
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
-        # Jump over the date and find the first colored XP gain
         pattern = rf"{dates['yesterday_iso']}.*?text-(?:green|red)-400\">([+-][\d,.]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         if match:
@@ -43,29 +43,49 @@ def fetch_guildstats_gain(name, dates):
     except: return 0
 
 # ==========================================
-# 🔥 STREAK ENGINE (V28 - CRASH PROOF)
+# ⭐ THE PB ENGINE (V31 - Dedicated File)
 # ==========================================
-def update_streak(winner_name):
-    """Tracks consecutive daily wins. Re-initializes if file is corrupted."""
-    # Load and ensure keys exist
-    raw_data = load_json(STREAKS_PATH, {})
+def handle_pb_check(name, current_gain):
+    """Reads from personal_bests.json and updates if a record is broken."""
+    pb_data = load_json(PB_PATH, {})
     
-    # If the file is old/wrong, reset it to a clean state
-    if "last_winner" not in raw_data or "count" not in raw_data:
-        streaks = {"last_winner": "", "count": 0}
-    else:
-        streaks = raw_data
+    # Get old PB (if it exists)
+    old_pb = pb_data.get(name, 0)
+    
+    if current_gain > old_pb:
+        # Save new record immediately
+        pb_data[name] = current_gain
+        save_json(PB_PATH, pb_data)
+        
+        # Only show the star if they actually had a previous record (prevents star on 1st run)
+        return True if old_pb > 0 else False
+        
+    return False
 
-    if streaks["last_winner"] == winner_name:
-        streaks["count"] += 1
+# ==========================================
+# 🔥 TRIPLE-TRACK STREAK ENGINE
+# ==========================================
+def update_period_streak(category, winner_name):
+    all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}})
+    if category not in all_streaks: all_streaks[category] = {}
+    
+    data = all_streaks[category]
+    last_winner = data.get("last_winner", "")
+    current_count = data.get("count", 0)
+    
+    if last_winner == winner_name:
+        new_count = current_count + 1
     else:
-        streaks["last_winner"] = winner_name
-        streaks["count"] = 1
+        new_count = 1
     
-    save_json(STREAKS_PATH, streaks)
+    all_streaks[category] = {"last_winner": winner_name, "count": new_count}
+    save_json(STREAKS_PATH, all_streaks)
     
-    icon = "👑" if streaks["count"] >= 5 else "🔥"
-    return icon, streaks["count"]
+    if category == "daily":
+        icon = "👑" if new_count >= 5 else "🔥"
+    else:
+        icon = "🔥" if new_count > 1 else ""
+    return icon, new_count
 
 # ==========================================
 # 📊 SUMMARY LOGIC
@@ -87,11 +107,10 @@ def get_summed_xp(logs, chars, days_to_look_back):
                 total_period_xp += -num if str(val).startswith('-') else num
         if total_period_xp != 0:
             rankings.append((name, total_period_xp))
-    
     rankings.sort(key=lambda x: x[1], reverse=True)
     return rankings
 
-def send_discord_post(title, ranking, color, is_daily=False):
+def send_discord_post(title, ranking, color, streak_cat=None):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook or not ranking: return
     
@@ -100,14 +119,20 @@ def send_discord_post(title, ranking, color, is_daily=False):
     fields = []
     
     streak_label = ""
-    if is_daily:
-        icon, count = update_streak(ranking[0][0])
-        streak_label = f" {icon} `{count}`"
+    if streak_cat:
+        icon, count = update_period_streak(streak_cat, ranking[0][0])
+        if count > 1 or streak_cat == "daily":
+            streak_label = f" {icon} `{count}`"
 
     for i, (name, xp) in enumerate(ranking[:5]):
         medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
         m = medals[i] if i < 5 else "🔹"
-        display_name = f"**{name}**{streak_label}" if (i == 0 and is_daily) else f"**{name}**"
+        
+        # ⭐ PB Check using the dedicated file
+        # (We only show stars on the Daily Champion post to keep it special)
+        pb_star = " ⭐️" if (streak_cat == "daily" and handle_pb_check(name, xp)) else ""
+        
+        display_name = f"**{name}**{streak_label}{pb_star}" if (i == 0) else f"**{name}**{pb_star}"
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         bar = "🟩" * round(pct/10) + "⬛" * (10 - round(pct/10))
         
@@ -122,7 +147,7 @@ def send_discord_post(title, ranking, color, is_daily=False):
             "title": f"🏆 {title} 🏆",
             "fields": fields,
             "color": color,
-            "footer": {"text": f"Team Total: {total_xp:+,} XP | 🔥 = Streak | 👑 = 5+ Day Streak"}
+            "footer": {"text": f"Total Team Progress: {total_xp:+,} XP | ⭐️ = New Personal Best"}
         }]
     }
     requests.post(webhook, json=payload)
@@ -142,7 +167,10 @@ def get_dates():
 def load_json(path, fallback=None):
     if not path.exists(): return fallback if fallback is not None else {}
     try:
-        with open(path, "r") as f: return json.load(f)
+        with open(path, "r") as f: 
+            content = f.read().strip()
+            if not content: return fallback
+            return json.loads(content)
     except: return fallback if fallback is not None else {}
 
 def save_json(path, data):
@@ -150,38 +178,38 @@ def save_json(path, data):
 
 def main():
     dates = get_dates()
-    logs, state = load_json(LOG_PATH), load_json(STATE_PATH)
+    logs, state = load_json(LOG_PATH, {}), load_json(STATE_PATH, {})
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
     print(f"🌐 Scraping for {dates['yesterday_iso']}...")
-    success = False
+    scrape_success = False
     for name in chars:
         gain = fetch_guildstats_gain(name, dates)
         if gain != 0:
             if name not in logs: logs[name] = {}
             logs[name][dates['yesterday_iso']] = f"{gain:+,}"
             print(f"✅ {name}: {gain:+,} XP")
-            success = True
+            scrape_success = True
             time.sleep(2)
     
-    if success: save_json(LOG_PATH, logs)
+    if scrape_success: save_json(LOG_PATH, logs)
 
-    # 1. WEEKLY SUMMARY
+    # 1. WEEKLY
     if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
         weekly_ranks = get_summed_xp(logs, chars, 7)
         if weekly_ranks:
-            send_discord_post("Weekly Power Ranking", weekly_ranks, 0x3498db)
+            send_discord_post("Weekly Power Ranking", weekly_ranks, 0x3498db, streak_cat="weekly")
             state["last_weekly"] = dates['yesterday_iso']
 
-    # 2. MONTHLY SUMMARY
+    # 2. MONTHLY
     if dates['is_first'] and state.get("last_monthly") != dates['yesterday_iso']:
         monthly_ranks = get_summed_xp(logs, chars, 31)
         if monthly_ranks:
-            send_discord_post(f"Monthly Champion: {dates['month_name']}", monthly_ranks, 0xf1c40f)
+            send_discord_post(f"Monthly Champion: {dates['month_name']}", monthly_ranks, 0xf1c40f, streak_cat="monthly")
             state["last_monthly"] = dates['yesterday_iso']
 
-    # 3. DAILY RANKING
+    # 3. DAILY
     daily_ranks = []
     for name in chars:
         v = logs.get(name, {}).get(dates['yesterday_iso'], "0")
@@ -190,4 +218,11 @@ def main():
             daily_ranks.append((name, int(clean) * (-1 if str(v).startswith('-') else 1)))
 
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
-        daily_ranks.sort
+        daily_ranks.sort(key=lambda x: x[1], reverse=True)
+        send_discord_post("Daily Champion", daily_ranks, 0x2ecc71, streak_cat="daily")
+        state["last_daily"] = dates['yesterday_iso']
+
+    save_json(STATE_PATH, state)
+
+if __name__ == "__main__":
+    main()
