@@ -17,17 +17,15 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE TIBIA-STATISTIC SNIPER (V18)
+# 🛠️ THE TIBIA-STATISTIC SNIPER (V19)
 # ==========================================
 def fetch_statistic_gain(name, dates):
     """
-    Scrapes Tibia-Statistic.com via Google Bridge.
-    Targets the 'Daily Activity' table which uses the DD.MM format.
+    Targets the specific JSON-style data block found in Tibia-Statistic HTML.
     """
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url: return "NO_URL"
 
-    # Tibia-Statistic uses lowercase names with %20 for spaces
     formatted_name = urllib.parse.quote(name.lower())
     target_url = f"https://www.tibia-statistic.com/statistics/players/{formatted_name}"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
@@ -36,34 +34,19 @@ def fetch_statistic_gain(name, dates):
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # --- THE STATISTIC SNIPER ---
-        # 1. Look for the date in DD.MM format (e.g., 22.03)
-        # 2. Skip any text (like '2h 15m') until we hit the [+] or [-] sign.
-        # 3. Capture the XP gain.
-        day_dot_month = dates['yesterday_dot'] # e.g., "22.03"
-        pattern = rf"{day_dot_month}.*?([+-][\d\s,.]+)"
+        # --- THE JSON-KEY SNIPER ---
+        # Matches the date (22.03) and then captures the number after "experienceGained":
+        # Handle both positive and negative (deaths)
+        day_dot_month = dates['yesterday_dot'] 
+        pattern = rf"{day_dot_month}.*?experienceGained\":\s*(-?\d+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
         if match:
-            raw_val = match.group(1)
-            is_negative = '-' in raw_val
-            # Clean: Remove everything except digits
-            clean_val = "".join(c for c in raw_val if c.isdigit())
+            val = int(match.group(1))
+            # Safety Valve: Ignore glitch numbers > 1 billion
+            if abs(val) > 1000000000: return 0 
+            return val
             
-            if clean_val:
-                val = int(clean_val)
-                # Safety Valve: Ignore glitch numbers > 1 billion
-                if val > 1000000000: return 0 
-                return -val if is_negative else val
-        
-        # DEBUG: If 0, let's see what the bot is hitting
-        if name == "Hex Good": # Example debug for your problematic character
-            pos = r.text.find(day_dot_month)
-            if pos != -1:
-                print(f"🔍 DEBUG [Hex]: Found {day_dot_month}. Context: {r.text[pos:pos+100]}")
-            else:
-                print(f"🔍 DEBUG [Hex]: Date {day_dot_month} not found in HTML.")
-
         return 0
     except Exception as e:
         print(f"⚠️ {name} Scrape Error: {e}")
@@ -76,8 +59,8 @@ def get_dates():
     now = datetime.now(tz)
     yesterday_obj = now - timedelta(days=1)
     return {
-        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"), # 2026-03-22
-        "yesterday_dot": yesterday_obj.strftime("%d.%m"),    # 22.03
+        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"), 
+        "yesterday_dot": yesterday_obj.strftime("%d.%m"),    
         "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d")
     }
 
@@ -139,7 +122,7 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Scraping Tibia-Statistic.com for {dates['yesterday_dot']}...")
+    print(f"🌐 Running V19 Sniper for {dates['yesterday_dot']}...")
     success_count = 0
     for name in chars:
         gain = fetch_statistic_gain(name, dates)
@@ -148,7 +131,7 @@ def main():
             logs[name][dates['yesterday_iso']] = f"{gain:+,}"
             print(f"✅ {name}: {gain:+,} XP")
             success_count += 1
-            time.sleep(2) 
+            time.sleep(1.5) 
         else:
             print(f"⚪ {name}: No daily gain found.")
 
@@ -167,9 +150,9 @@ def main():
             send_discord_post("Daily Champion", dates['yesterday_iso'], rank_y, total_y, change)
             state["last_daily"] = dates['yesterday_iso']
             save_json(STATE_PATH, state)
-            print("🚀 Successfully updated and posted.")
+            print("🚀 Process Complete.")
     else:
-        print("⛔ Scrape returned 0 for everyone. Ensure characters have recent activity on Tibia-Statistic.")
+        print("⛔ Scrape failed to extract XP gains. Ensure data exists on site.")
 
 if __name__ == "__main__":
     main()
