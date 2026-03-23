@@ -2,8 +2,8 @@ name: Tibia XP Tracker
 
 on:
   schedule:
-    # Runs at 09:15 UTC (09:15 AM UK) - The sweet spot after Server Save
-    - cron: '15 9 * * *'
+    # Runs at 09:45 UTC (09:15 AM UK) - The sweet spot after Server Save
+    - cron: '45 9 * * *'
   workflow_dispatch: # Keeps the manual "Run" button active
 
 permissions:
