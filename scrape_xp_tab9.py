@@ -17,49 +17,56 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE GOOGLE BRIDGE SCRAPER (SHARPSHOOTER)
+# 🛠️ THE GOOGLE BRIDGE SCRAPER (V2 SHARPSHOOTER)
 # ==========================================
 def fetch_guildstats_gain(name, target_date):
     """
-    Routes the request through the Google Apps Script Bridge to bypass 403s.
-    Targets the internal 'experience' tab for the most direct data.
+    Routes request through Google Bridge to bypass 403s.
+    Uses an advanced regex to skip the Level column and grab the Experience Gain.
     """
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url:
-        print("❌ ERROR: GOOGLE_BRIDGE_URL secret is missing from GitHub!")
+        print("❌ ERROR: GOOGLE_BRIDGE_URL secret is missing!")
         return "NO_URL"
 
-    # Encoding name for the URL (GuildStats prefers + for spaces)
+    # GuildStats prefers '+' for spaces in names
     formatted_name = name.replace(' ', '+')
-    
-    # Internal endpoint discovered from the page source
     target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
-    
-    # Final URL sent to your Google Script
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
     
     try:
-        # Increased timeout because the bridge does a double-fetch for cookies
+        # Higher timeout because the bridge performs a cookie-handshake
         r = requests.get(final_url, timeout=45)
         
         if r.status_code != 200:
-            print(f"⚠️ Bridge returned status {r.status_code} for {name}")
+            print(f"⚠️ Bridge returned {r.status_code} for {name}")
             return 0
-            
-        # THE HEAT-SEEKING REGEX:
-        # Targets the date, skips HTML tags, and grabs the XP number.
-        # Handles both comma (1,000,000) and dot (1.000.000) formats.
-        pattern = rf"{target_date}.*?>\s*([+-]?[\d,.]+)"
+
+        # REGEX V2 LOGIC:
+        # 1. Finds the date (e.g., 2026-03-22).
+        # 2. Skip the first </td> (the date cell).
+        # 3. Skip the next <td>...</td> entirely (the Level cell).
+        # 4. Capture the number in the FOLLOWING cell (the XP gain).
+        pattern = rf"{target_date}.*?</td>.*?<td.*?>.*?</td>.*?<td.*?>\s*([+-]?[\d,.]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
         if match:
-            # Clean formatting: remove separators and the '+' sign
-            clean_val = match.group(1).replace(',', '').replace('.', '').replace('+', '')
+            raw_val = match.group(1)
+            # Remove commas/dots and the '+' sign
+            clean_val = raw_val.replace(',', '').replace('.', '').replace('+', '')
+            
+            # Final Safety: If it's a tiny number (like '3'), try an alternate 'greedy' search
+            # for a number specifically starting with a + or - (the Gain signature)
+            if len(clean_val) < 4 and "+" not in raw_val and "-" not in raw_val:
+                alt_pattern = rf"{target_date}.*?([+-][\d,.]+)"
+                alt_match = re.search(alt_pattern, r.text, re.IGNORECASE | re.DOTALL)
+                if alt_match:
+                    clean_val = alt_match.group(1).replace(',', '').replace('.', '').replace('+', '')
+
             return int(clean_val)
-        
         return 0
     except Exception as e:
-        print(f"⚠️ Request failed for {name}: {e}")
+        print(f"⚠️ {name} Scrape Error: {e}")
         return 0
 
 # ==========================================
@@ -68,7 +75,6 @@ def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
     return {
-        "today": now.strftime("%Y-%m-%d"),
         "yesterday": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
         "day_before": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
         "obj": now
@@ -90,16 +96,13 @@ def parse_xp(val):
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
     filled = round((val / max_val) * 10)
-    # Clamp between 0 and 10
     filled = max(0, min(10, filled))
     return "🟩" * filled + "⬛" * (10 - filled)
 
 # --- DISCORD POSTER ---
 def send_discord_post(title, date_label, ranking, team_total, team_change):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
-    if not webhook or not ranking: 
-        print("⚠️ Skipping Discord post: No ranking or Webhook URL.")
-        return
+    if not webhook or not ranking: return
 
     max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
@@ -108,10 +111,8 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
 
     # 1. PROCESS STREAKS
     streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
-    if "daily" not in streaks: streaks["daily"] = {"last_winner": "", "count": 0}
-    
     winner_name = ranking[0][0]
-    daily = streaks["daily"]
+    daily = streaks.get("daily", {"last_winner": "", "count": 0})
 
     if daily.get("last_winner") == winner_name:
         daily["count"] += 1
@@ -140,7 +141,7 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
         fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
 
     # 4. FOOTER
-    footer_text = f"Team Total: {team_total:,} XP ({team_change} vs last daily)\n"
+    footer_text = f"Total: {team_total:,} XP ({team_change})\n"
     footer_text += "🔥 = 1-4 Streak | 👑 = 5+ Streak"
 
     payload = {
@@ -152,12 +153,7 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
             "footer": {"text": footer_text}
         }]
     }
-    
-    r = requests.post(webhook, json=payload)
-    if r.status_code in [200, 204]:
-        print("🚀 Discord post sent successfully!")
-    else:
-        print(f"❌ Discord error: {r.status_code}")
+    requests.post(webhook, json=payload)
 
 # --- MAIN ENGINE ---
 def main():
@@ -165,70 +161,49 @@ def main():
     logs = load_json(LOG_PATH)
     state = load_json(STATE_PATH)
     
-    if not CHAR_FILE.exists():
-        print("❌ Error: characters.txt not found.")
-        return
-        
-    with open(CHAR_FILE) as f: 
-        chars = [l.strip() for l in f if l.strip()]
+    if not CHAR_FILE.exists(): return
+    with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    # --- STEP 1: SCRAPE DATA VIA GOOGLE BRIDGE ---
-    print(f"🌐 Using Google Bridge to fetch gains for {dates['yesterday']}...")
+    print(f"🌐 Fetching fresh data via Google Bridge for {dates['yesterday']}...")
     
     success_count = 0
     for name in chars:
-        # We fetch fresh data from the bridge
         gain = fetch_guildstats_gain(name, dates['yesterday'])
         
         if isinstance(gain, int):
             if name not in logs: logs[name] = {}
-            # Update the log for yesterday
+            # Update log with the real number
             logs[name][dates['yesterday']] = f"+{gain:,}"
             print(f"✅ {name}: {gain:,} XP (Scraped)")
             success_count += 1
-            # Brief pause to be polite to the bridge
-            time.sleep(2)
-        elif gain == "NO_URL":
-            return
+            time.sleep(2) # Pause for the bridge
+        elif gain == "NO_URL": return
         else:
-            print(f"⚪ {name}: No update found on GuildStats.")
+            print(f"⚪ {name}: No daily gain found.")
 
     if success_count > 0:
         save_json(LOG_PATH, logs)
     else:
-        print("⛔ No data could be scraped. Aborting Discord post.")
+        print("⛔ Scrape failed for all characters. Aborting post.")
         return
 
-    # --- STEP 2: CALCULATE RANKINGS ---
+    # RANK AND POST
     rank_y = []
     total_y, total_db = 0, 0
-
     for name in chars:
-        history = logs.get(name, {})
-        val_y = parse_xp(history.get(dates['yesterday'], 0))
-        val_db = parse_xp(history.get(dates['day_before'], 0))
-        
-        if val_y > 0: 
-            rank_y.append((name, val_y))
-        total_y += val_y
-        total_db += val_db
+        h = logs.get(name, {})
+        y = parse_xp(h.get(dates['yesterday'], 0))
+        db = parse_xp(h.get(dates['day_before'], 0))
+        if y > 0: rank_y.append((name, y))
+        total_y += y; total_db += db
 
-    if not rank_y: 
-        print(f"❌ No valid XP gains in log for {dates['yesterday']}.")
-        return
-
-    rank_y.sort(key=lambda x: x[1], reverse=True)
-
-    # --- STEP 3: POST TO DISCORD ---
-    # Only post if we haven't posted for this date yet
-    if state.get("last_daily") != dates['yesterday']:
+    if rank_y and state.get("last_daily") != dates['yesterday']:
+        rank_y.sort(key=lambda x: x[1], reverse=True)
         change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
         send_discord_post("Daily Champion", dates['yesterday'], rank_y, total_y, change)
-        
         state["last_daily"] = dates['yesterday']
         save_json(STATE_PATH, state)
-    else:
-        print(f"⏭️ Skipping Discord post: Already posted for {dates['yesterday']}.")
+        print("🚀 Scrape and Discord Post complete.")
 
 if __name__ == "__main__":
     main()
