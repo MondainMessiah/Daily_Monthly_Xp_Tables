@@ -2,7 +2,6 @@ import os
 import json
 import requests
 import re
-import urllib.parse
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -16,53 +15,38 @@ STATE_PATH = BASE_DIR / "post_state.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
-# ==========================================
-# 🛠️ GUILDSTATS.EU SCRAPER (STEALTH MODE) 🛠️
-# ==========================================
 def fetch_guildstats_gain(session, name, target_date):
-    """
-    Uses stealth headers and a persistent session to bypass 403 errors.
-    Targets the specific date and extracts the XP gain from the table.
-    """
+    # CHANGED: Using the direct path URL format
     formatted_name = name.replace(' ', '+')
-    url = f"https://guildstats.eu/character?nick={formatted_name}"
+    url = f"https://guildstats.eu/character/{formatted_name}"
     
-    # Browser-grade headers to look like a real Windows user
+    # CHANGED: Mobile Safari headers (often bypasses basic Cloudflare IP blocks)
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-GB,en;q=0.9',
         'Referer': 'https://guildstats.eu/',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Cache-Control': 'max-age=0'
+        'Connection': 'keep-alive'
     }
     
     try:
         r = session.get(url, headers=headers, timeout=20)
         
         if r.status_code == 403:
-            print(f"❌ {name}: Blocked (403). GuildStats is detecting the script.")
-            return 0
-        elif r.status_code != 200:
-            print(f"⚠️ {name}: Site error {r.status_code}")
-            return 0
+            return "BLOCKED"
+        if r.status_code != 200:
+            return "ERROR"
         
-        # SHARPSHOOTER REGEX:
-        # Targets the date, leaps to the next 'text-right' cell, captures the XP.
+        # Heat-Seeking Regex
         pattern = rf"{target_date}.*?class=\"text-right.*?>\s*([+-]?[\d,]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
         if match:
             clean_val = match.group(1).replace(',', '').replace('+', '')
             return int(clean_val)
-            
         return 0
-    except Exception as e:
-        print(f"⚠️ Error scraping {name}: {e}")
-    return 0
-
-# ==========================================
+    except:
+        return "ERROR"
 
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
@@ -92,137 +76,103 @@ def make_bar(val, max_val):
     filled = round((val / max_val) * 10)
     return "🟩" * filled + "⬛" * (10 - filled)
 
-# --- DISCORD POSTER ---
 def send_discord_post(title, date_label, ranking, team_total, team_change):
-    if not ranking:
-        print("⚠️ Skipping post: Ranking list is empty.")
-        return
-    
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
-    if not webhook:
-        print("❌ Error: DISCORD_WEBHOOK_URL not found in environment.")
-        return
+    if not webhook or not ranking: return
 
     max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-    medal_colors = {0: 0xFFD700, 1: 0xC0C0C0, 2: 0xCD7F32} # Gold, Silver, Bronze
     fields = []
-    description_addon = ""
-
-    # 1. STREAKS
+    
+    # Streaks
     streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
     winner_name = ranking[0][0]
     daily = streaks.get("daily", {"last_winner": "", "count": 0})
+    desc_addon = ""
 
     if daily.get("last_winner") == winner_name:
         daily["count"] += 1
     else:
         if daily.get("last_winner") and daily.get("count", 0) >= 2:
-            description_addon = f"\n⚔️ **{winner_name}** ended **{daily['last_winner']}'s** `{daily['count']}` day streak!"
+            desc_addon = f"\n⚔️ **{winner_name}** ended **{daily['last_winner']}'s** `{daily['count']}` day streak!"
         daily["last_winner"], daily["count"] = winner_name, 1
     
     save_json(STREAKS_PATH, streaks)
     icon = "👑" if daily['count'] >= 5 else "🔥"
-    streak_display = f" {icon} `{daily['count']}`"
-
-    # 2. TOP 3
+    
     for i, (name, xp) in enumerate(ranking[:3]):
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
-        s = streak_display if i == 0 else ""
+        s = f" {icon} `{daily['count']}`" if i == 0 else ""
         fields.append({
             "name": f"{medals[i]} **{name}**{s}",
             "value": f"`+{xp:,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
             "inline": False
         })
 
-    # 3. OTHERS
     others = [f"**{n}** (+{v:,} XP)" for n, v in ranking[3:10] if v > 0]
-    if others:
-        fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
-
-    # 4. FOOTER
-    footer_text = f"Team Total: {team_total:,} XP ({team_change} vs last daily)\n"
-    footer_text += "🔥 = 1-4 Streak | 👑 = 5+ Streak"
+    if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
 
     payload = {
         "embeds": [{
             "title": f"🏆 {title} 🏆",
-            "description": f"🗓️ Date: **{date_label}**{description_addon}",
+            "description": f"🗓️ Date: **{date_label}**{desc_addon}",
             "fields": fields,
             "color": 0x2ecc71,
-            "footer": {"text": footer_text}
+            "footer": {"text": f"Total: {team_total:,} XP ({team_change})\n🔥 = 1-4 Streak | 👑 = 5+ Streak"}
         }]
     }
-    
-    r = requests.post(webhook, json=payload)
-    if r.status_code in [200, 204]:
-        print("🚀 Discord post sent!")
-    else:
-        print(f"❌ Discord error: {r.status_code}")
+    requests.post(webhook, json=payload)
 
-# --- MAIN ENGINE ---
 def main():
     dates = get_dates()
     logs = load_json(LOG_PATH)
     state = load_json(STATE_PATH)
     
-    if not CHAR_FILE.exists():
-        print("❌ characters.txt is missing.")
-        return
-        
-    with open(CHAR_FILE) as f: 
-        chars = [l.strip() for l in f if l.strip()]
+    if not CHAR_FILE.exists(): return
+    with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    # --- STEP 1: SCRAPE DATA ---
     print(f"🔍 Fetching gains for {dates['yesterday']}...")
     
-    # Using a Session is better for stealth
+    scrape_success = False
     with requests.Session() as session:
         for name in chars:
-            gain = fetch_guildstats_gain(session, name, dates['yesterday'])
+            result = fetch_guildstats_gain(session, name, dates['yesterday'])
             
             if name not in logs: logs[name] = {}
             
-            if gain != 0:
-                logs[name][dates['yesterday']] = f"+{gain:,}" if gain > 0 else f"{gain:,}"
-                print(f"✅ {name}: {gain:,} XP")
-            else:
-                print(f"⚪ {name}: No update found.")
+            if isinstance(result, int):
+                if result != 0:
+                    logs[name][dates['yesterday']] = f"+{result:,}"
+                    print(f"✅ {name}: {result:,} XP")
+                    scrape_success = True
+                else:
+                    print(f"⚪ {name}: No daily gain found.")
+            elif result == "BLOCKED":
+                print(f"❌ {name}: Blocked (403).")
             
-            # 3-second breathing room to avoid bot detection
-            time.sleep(3) 
+            time.sleep(5) # Higher delay for stealth
 
-    save_json(LOG_PATH, logs)
-
-    # --- STEP 2: CALCULATE RANKINGS ---
-    rank_y = []
-    total_y, total_db = 0, 0
-
-    for name in chars:
-        history = logs.get(name, {})
-        val_y = parse_xp(history.get(dates['yesterday'], 0))
-        val_db = parse_xp(history.get(dates['day_before'], 0))
+    # ONLY SAVE AND POST IF AT LEAST ONE CHARACTER WAS SUCCESSFULLY SCRAPED
+    if scrape_success:
+        save_json(LOG_PATH, logs)
         
-        if val_y > 0: 
-            rank_y.append((name, val_y))
-        total_y += val_y
-        total_db += val_db
+        rank_y = []
+        total_y, total_db = 0, 0
+        for name in chars:
+            h = logs.get(name, {})
+            y, db = parse_xp(h.get(dates['yesterday'], 0)), parse_xp(h.get(dates['day_before'], 0))
+            if y > 0: rank_y.append((name, y))
+            total_y += y; total_db += db
 
-    if not rank_y: 
-        print(f"❌ No XP data found for {dates['yesterday']}. Aborting post.")
-        return
-
-    rank_y.sort(key=lambda x: x[1], reverse=True)
-
-    # --- STEP 3: POST TO DISCORD ---
-    if state.get("last_daily") != dates['yesterday']:
-        change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
-        send_discord_post("Daily Champion", dates['yesterday'], rank_y, total_y, change)
-        
-        state["last_daily"] = dates['yesterday']
-        save_json(STATE_PATH, state)
+        if rank_y and state.get("last_daily") != dates['yesterday']:
+            rank_y.sort(key=lambda x: x[1], reverse=True)
+            change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
+            send_discord_post("Daily Champion", dates['yesterday'], rank_y, total_y, change)
+            state["last_daily"] = dates['yesterday']
+            save_json(STATE_PATH, state)
+            print("🚀 Successfully updated and posted.")
     else:
-        print(f"⏭️ Already posted for {dates['yesterday']}.")
+        print("⛔ Aborting: No new data was scraped (IP block likely still active).")
 
 if __name__ == "__main__":
     main()
