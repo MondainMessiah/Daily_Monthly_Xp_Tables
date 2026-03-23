@@ -17,7 +17,7 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE GOOGLE BRIDGE SCRAPER (V7 UNIVERSAL)
+# 🛠️ THE GOOGLE BRIDGE SCRAPER (V8 ANCHOR & JUMP)
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
@@ -31,26 +31,28 @@ def fetch_guildstats_gain(name, dates):
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # We try two date formats: "22-03-2026" and "22-03"
-        formats_to_try = [dates['yesterday_gs'], dates['yesterday_gs_short']]
+        # We search for the date, then look for the NEXT <td> cell that has a + or -
+        # This skips the date's own dashes and the level column.
+        pattern = rf"{dates['yesterday_gs']}.*?</td>.*?<td.*?>.*?</td>.*?<td.*?>.*?([+-][\d,.]+)"
+        match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
-        for d_str in formats_to_try:
-            # THE UNIVERSAL REGEX:
-            # Find the date string, skip everything (.*?) until the first [+] or [-] 
-            # followed by numbers/commas/dots.
-            pattern = rf"{d_str}.*?([+-][\d,.]+)"
+        # If the long date fails, try the short date format
+        if not match:
+            pattern = rf"{dates['yesterday_gs_short']}.*?</td>.*?<td.*?>.*?</td>.*?<td.*?>.*?([+-][\d,.]+)"
             match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
+
+        if match:
+            raw_val = match.group(1)
+            is_negative = '-' in raw_val
+            clean_val = "".join(c for c in raw_val if c.isdigit())
             
-            if match:
-                raw_val = match.group(1)
-                is_negative = '-' in raw_val
-                clean_val = "".join(c for c in raw_val if c.isdigit())
-                
-                if clean_val:
-                    val = int(clean_val)
-                    return -val if is_negative else val
+            if clean_val:
+                val = int(clean_val)
+                # EMERGENCY BRAKE: No one gains 1 billion XP in a day. 
+                # This stops the "Hex Good" mega-number bug.
+                if val > 500000000: return 0 
+                return -val if is_negative else val
         
-        # DEBUG: If it still finds 0, it means the date format on the site is weird.
         return 0
     except Exception as e:
         print(f"⚠️ {name} Scrape Error: {e}")
@@ -86,6 +88,8 @@ def parse_xp(val):
         clean = "".join(c for c in s if c.isdigit())
         if not clean: return 0
         num = int(clean)
+        # Limit to reasonable Tibia XP (max 500kk)
+        if num > 500000000: return 0
         return -num if is_neg else num
     except: return 0
 
@@ -152,16 +156,15 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Universal Scraping for {dates['yesterday_gs']}...")
+    print(f"🌐 Anchor-Scraping for {dates['yesterday_gs']}...")
     
     success_count = 0
     for name in chars:
-        # Pass the full dates dictionary to check multiple formats
         gain = fetch_guildstats_gain(name, dates)
         
         if isinstance(gain, int):
             if name not in logs: logs[name] = {}
-            # Update the log with the result
+            # Update the log
             logs[name][dates['yesterday_iso']] = f"{gain:+,}"
             print(f"✅ {name}: {gain:+,} XP")
             if gain != 0: success_count += 1
@@ -187,7 +190,7 @@ def main():
             save_json(STATE_PATH, state)
             print("🚀 Successfully updated and posted.")
     else:
-        print("⛔ No data found for the target date. Check the site manually.")
+        print("⛔ No data found. Verify the date exists in the GuildStats history table.")
 
 if __name__ == "__main__":
     main()
