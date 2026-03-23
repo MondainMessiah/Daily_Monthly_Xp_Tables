@@ -28,6 +28,7 @@ def fetch_guildstats_gain(name, dates):
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
+        # Jump over the date and find the first colored XP gain
         pattern = rf"{dates['yesterday_iso']}.*?text-(?:green|red)-400\">([+-][\d,.]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         if match:
@@ -42,12 +43,19 @@ def fetch_guildstats_gain(name, dates):
     except: return 0
 
 # ==========================================
-# 🔥 STREAK ENGINE (NEW)
+# 🔥 STREAK ENGINE (V28 - CRASH PROOF)
 # ==========================================
 def update_streak(winner_name):
-    """Tracks consecutive daily wins for the top player."""
-    streaks = load_json(STREAKS_PATH, {"last_winner": "", "count": 0})
+    """Tracks consecutive daily wins. Re-initializes if file is corrupted."""
+    # Load and ensure keys exist
+    raw_data = load_json(STREAKS_PATH, {})
     
+    # If the file is old/wrong, reset it to a clean state
+    if "last_winner" not in raw_data or "count" not in raw_data:
+        streaks = {"last_winner": "", "count": 0}
+    else:
+        streaks = raw_data
+
     if streaks["last_winner"] == winner_name:
         streaks["count"] += 1
     else:
@@ -56,7 +64,6 @@ def update_streak(winner_name):
     
     save_json(STREAKS_PATH, streaks)
     
-    # Choose icon based on streak length
     icon = "👑" if streaks["count"] >= 5 else "🔥"
     return icon, streaks["count"]
 
@@ -92,7 +99,6 @@ def send_discord_post(title, ranking, color, is_daily=False):
     total_xp = sum(item[1] for item in ranking)
     fields = []
     
-    # Apply Streak to Daily #1 only
     streak_label = ""
     if is_daily:
         icon, count = update_streak(ranking[0][0])
@@ -101,10 +107,7 @@ def send_discord_post(title, ranking, color, is_daily=False):
     for i, (name, xp) in enumerate(ranking[:5]):
         medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
         m = medals[i] if i < 5 else "🔹"
-        
-        # Add streak label to the first person in the daily list
         display_name = f"**{name}**{streak_label}" if (i == 0 and is_daily) else f"**{name}**"
-        
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         bar = "🟩" * round(pct/10) + "⬛" * (10 - round(pct/10))
         
@@ -119,7 +122,7 @@ def send_discord_post(title, ranking, color, is_daily=False):
             "title": f"🏆 {title} 🏆",
             "fields": fields,
             "color": color,
-            "footer": {"text": f"Team Total: {total_xp:+,} XP | 🔥 = 1-4 Streak | 👑 = 5+ Streak"}
+            "footer": {"text": f"Team Total: {total_xp:+,} XP | 🔥 = Streak | 👑 = 5+ Day Streak"}
         }]
     }
     requests.post(webhook, json=payload)
@@ -133,8 +136,7 @@ def get_dates():
         "yesterday_iso": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
         "is_monday": now.weekday() == 0,
         "is_first": now.day == 1,
-        "month_name": (now - timedelta(days=1)).strftime("%B"),
-        "obj": now
+        "month_name": (now - timedelta(days=1)).strftime("%B")
     }
 
 def load_json(path, fallback=None):
@@ -165,19 +167,21 @@ def main():
     
     if success: save_json(LOG_PATH, logs)
 
-    # 1. WEEKLY SUMMARY (Mondays)
+    # 1. WEEKLY SUMMARY
     if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
         weekly_ranks = get_summed_xp(logs, chars, 7)
-        send_discord_post("Weekly Power Ranking", weekly_ranks, 0x3498db)
-        state["last_weekly"] = dates['yesterday_iso']
+        if weekly_ranks:
+            send_discord_post("Weekly Power Ranking", weekly_ranks, 0x3498db)
+            state["last_weekly"] = dates['yesterday_iso']
 
-    # 2. MONTHLY SUMMARY (1st)
+    # 2. MONTHLY SUMMARY
     if dates['is_first'] and state.get("last_monthly") != dates['yesterday_iso']:
         monthly_ranks = get_summed_xp(logs, chars, 31)
-        send_discord_post(f"Monthly Champion: {dates['month_name']}", monthly_ranks, 0xf1c40f)
-        state["last_monthly"] = dates['yesterday_iso']
+        if monthly_ranks:
+            send_discord_post(f"Monthly Champion: {dates['month_name']}", monthly_ranks, 0xf1c40f)
+            state["last_monthly"] = dates['yesterday_iso']
 
-    # 3. DAILY RANKING (With Streaks)
+    # 3. DAILY RANKING
     daily_ranks = []
     for name in chars:
         v = logs.get(name, {}).get(dates['yesterday_iso'], "0")
@@ -186,11 +190,4 @@ def main():
             daily_ranks.append((name, int(clean) * (-1 if str(v).startswith('-') else 1)))
 
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
-        daily_ranks.sort(key=lambda x: x[1], reverse=True)
-        send_discord_post("Daily Champion", daily_ranks, 0x2ecc71, is_daily=True)
-        state["last_daily"] = dates['yesterday_iso']
-
-    save_json(STATE_PATH, state)
-
-if __name__ == "__main__":
-    main()
+        daily_ranks.sort
