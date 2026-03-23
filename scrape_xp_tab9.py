@@ -17,7 +17,7 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE GOOGLE BRIDGE SCRAPER (V8 ANCHOR & JUMP)
+# 🛠️ THE GOOGLE BRIDGE SCRAPER (V9 SNIPER)
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
@@ -31,14 +31,17 @@ def fetch_guildstats_gain(name, dates):
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # We search for the date, then look for the NEXT <td> cell that has a + or -
-        # This skips the date's own dashes and the level column.
-        pattern = rf"{dates['yesterday_gs']}.*?</td>.*?<td.*?>.*?</td>.*?<td.*?>.*?([+-][\d,.]+)"
+        # --- THE SNIPER LOGIC ---
+        # 1. Find the date (e.g., 22-03-2026).
+        # 2. Look for the next '</td>' to make sure we are OUTSIDE the date cell.
+        # 3. Look for the very next sequence that starts with + or - and has numbers.
+        # This ignores the 'Level' column entirely because levels don't have + or - signs.
+        pattern = rf"{dates['yesterday_gs']}</td>.*?([+-][\d,.]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
-        # If the long date fails, try the short date format
+        # Try short date (22-03) if long date fails
         if not match:
-            pattern = rf"{dates['yesterday_gs_short']}.*?</td>.*?<td.*?>.*?</td>.*?<td.*?>.*?([+-][\d,.]+)"
+            pattern = rf"{dates['yesterday_gs_short']}</td>.*?([+-][\d,.]+)"
             match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
 
         if match:
@@ -48,11 +51,11 @@ def fetch_guildstats_gain(name, dates):
             
             if clean_val:
                 val = int(clean_val)
-                # EMERGENCY BRAKE: No one gains 1 billion XP in a day. 
-                # This stops the "Hex Good" mega-number bug.
-                if val > 500000000: return 0 
+                # Emergency Brake: ignore impossible Tibia numbers
+                if val > 1000000000: return 0 
                 return -val if is_negative else val
         
+        # If we still find 0, the date might not be in the table yet.
         return 0
     except Exception as e:
         print(f"⚠️ {name} Scrape Error: {e}")
@@ -88,8 +91,6 @@ def parse_xp(val):
         clean = "".join(c for c in s if c.isdigit())
         if not clean: return 0
         num = int(clean)
-        # Limit to reasonable Tibia XP (max 500kk)
-        if num > 500000000: return 0
         return -num if is_neg else num
     except: return 0
 
@@ -156,7 +157,7 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Anchor-Scraping for {dates['yesterday_gs']}...")
+    print(f"🌐 Sniper Scraping (V9) for {dates['yesterday_gs']}...")
     
     success_count = 0
     for name in chars:
@@ -164,7 +165,7 @@ def main():
         
         if isinstance(gain, int):
             if name not in logs: logs[name] = {}
-            # Update the log
+            # Update the log with the result
             logs[name][dates['yesterday_iso']] = f"{gain:+,}"
             print(f"✅ {name}: {gain:+,} XP")
             if gain != 0: success_count += 1
@@ -188,9 +189,9 @@ def main():
             send_discord_post("Daily Champion", dates['yesterday_iso'], rank_y, total_y, change)
             state["last_daily"] = dates['yesterday_iso']
             save_json(STATE_PATH, state)
-            print("🚀 Successfully updated and posted.")
+            print("🚀 Process Complete.")
     else:
-        print("⛔ No data found. Verify the date exists in the GuildStats history table.")
+        print("⛔ Scrape returned 0 for all characters. Data might not be updated yet.")
 
 if __name__ == "__main__":
     main()
