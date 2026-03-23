@@ -17,12 +17,12 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
-# 🛠️ THE GOOGLE BRIDGE SCRAPER (V3 SIGNATURE-SEEKER)
+# 🛠️ THE GOOGLE BRIDGE SCRAPER (V4 EUROPEAN)
 # ==========================================
-def fetch_guildstats_gain(name, target_date):
+def fetch_guildstats_gain(name, target_date_gs):
     """
-    Routes request through Google Bridge to bypass 403 blocks.
-    Anchors search to the <td> date cell and seeks the [+-] sign.
+    Routes request through Google Bridge.
+    Matches the European date format (DD-MM-YYYY) used by GuildStats.
     """
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url:
@@ -34,29 +34,23 @@ def fetch_guildstats_gain(name, target_date):
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
     
     try:
-        # Fetching through the Google Apps Script Bridge
         r = requests.get(final_url, timeout=45)
-        
-        if r.status_code != 200:
-            print(f"⚠️ Bridge returned {r.status_code} for {name}")
-            return 0
+        if r.status_code != 200: return 0
 
-        # SHARPSHOOTER V3 REGEX:
-        # 1. Anchor to '<td>YYYY-MM-DD</td>' to ignore numbers inside the date.
-        # 2. Skip over the Level column entirely (.*?<td.*?>.*?</td>).
-        # 3. Look for the mandatory [+-] sign and the digits/separators.
-        pattern = rf"<td>{target_date}</td>.*?<td.*?>.*?</td>.*?<td.*?>\s*([+-][\d,.]+)"
+        # SHARPSHOOTER V4 REGEX:
+        # 1. Matches the date (DD-MM-YYYY).
+        # 2. Skips the 'Level' cell.
+        # 3. Captures the Experience Gain cell.
+        # We look for the number after the date and the first set of <td> tags.
+        pattern = rf"{target_date_gs}.*?</td>.*?<td.*?>\s*([+-]?[\d,.]+)"
         match = re.search(pattern, r.text, re.IGNORECASE | re.DOTALL)
         
         if match:
             raw_val = match.group(1)
             is_negative = '-' in raw_val
-            
-            # Clean: Remove commas, dots, pluses, and minuses
-            clean_val = raw_val.replace(',', '').replace('.', '').replace('+', '').replace('-', '')
+            clean_val = "".join(c for c in raw_val if c.isdigit())
             
             if not clean_val: return 0
-            
             val = int(clean_val)
             return -val if is_negative else val
             
@@ -70,9 +64,15 @@ def fetch_guildstats_gain(name, target_date):
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
+    yesterday_obj = now - timedelta(days=1)
+    day_before_obj = now - timedelta(days=2)
+    
     return {
-        "yesterday": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
-        "day_before": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
+        # ISO format for your JSON logs (2026-03-22)
+        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
+        "day_before_iso": day_before_obj.strftime("%Y-%m-%d"),
+        # GuildStats format for scraping (22-03-2026)
+        "yesterday_gs": yesterday_obj.strftime("%d-%m-%Y"),
         "obj": now
     }
 
@@ -86,18 +86,14 @@ def save_json(path, data):
     with open(path, "w") as f: json.dump(data, f, indent=2)
 
 def parse_xp(val):
-    """Robust cleaner for XP strings. Handles deaths and EU/US formats."""
     try:
-        # Remove all formatting but keep the leading '-' for deaths
         s = str(val).strip()
         is_neg = s.startswith('-')
         clean = "".join(c for c in s if c.isdigit())
-        
         if not clean: return 0
         num = int(clean)
         return -num if is_neg else num
-    except:
-        return 0
+    except: return 0
 
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
@@ -115,7 +111,6 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
     fields = []
     description_addon = ""
 
-    # 1. PROCESS STREAKS
     streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
     winner_name = ranking[0][0]
     daily = streaks.get("daily", {"last_winner": "", "count": 0})
@@ -131,26 +126,18 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
     icon = "👑" if daily['count'] >= 5 else "🔥"
     streak_display = f" {icon} `{daily['count']}`"
 
-    # 2. BUILD TOP 3
     for i, (name, xp) in enumerate(ranking[:3]):
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         s = streak_display if i == 0 else ""
-        # Format XP with a plus if positive
-        xp_str = f"+{xp:,}" if xp > 0 else f"{xp:,}"
         fields.append({
             "name": f"{medals[i]} **{name}**{s}",
-            "value": f"`{xp_str} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
+            "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
             "inline": False
         })
 
-    # 3. OTHER GAINS
     others = [f"**{n}** ({v:+,} XP)" for n, v in ranking[3:10] if v != 0]
     if others:
         fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
-
-    # 4. FOOTER
-    footer_text = f"Total: {team_total:,} XP ({team_change})\n"
-    footer_text += "🔥 = 1-4 Streak | 👑 = 5+ Streak"
 
     payload = {
         "embeds": [{
@@ -158,7 +145,7 @@ def send_discord_post(title, date_label, ranking, team_total, team_change):
             "description": f"🗓️ Date: **{date_label}**{description_addon}",
             "fields": fields,
             "color": 0x2ecc71,
-            "footer": {"text": footer_text}
+            "footer": {"text": f"Total: {team_total:,} XP ({team_change})\n🔥 = 1-4 Streak | 👑 = 5+ Streak"}
         }]
     }
     requests.post(webhook, json=payload)
@@ -172,46 +159,44 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Signature-Scraping via Google Bridge for {dates['yesterday']}...")
+    print(f"🌐 Scraping GuildStats (Date: {dates['yesterday_gs']}) via Google Bridge...")
     
     success_count = 0
     for name in chars:
-        gain = fetch_guildstats_gain(name, dates['yesterday'])
+        # We use the European date for the scraper
+        gain = fetch_guildstats_gain(name, dates['yesterday_gs'])
         
         if isinstance(gain, int):
             if name not in logs: logs[name] = {}
-            # We save it as a string with the plus sign for your JSON visibility
-            logs[name][dates['yesterday']] = f"+{gain:,}" if gain >= 0 else f"{gain:,}"
-            print(f"✅ {name}: {gain:,} XP (Scraped)")
+            # We use the ISO date for your logs to keep them tidy
+            logs[name][dates['yesterday_iso']] = f"{gain:+,}"
+            print(f"✅ {name}: {gain:,} XP")
             success_count += 1
             time.sleep(2) 
         elif gain == "NO_URL": return
-        else:
-            print(f"⚪ {name}: No daily data found.")
 
     if success_count > 0:
         save_json(LOG_PATH, logs)
     else:
-        print("⛔ Scrape failed for all characters. Verify Google Bridge URL.")
+        print("⛔ No data found. Is the date correct on the website?")
         return
 
-    # RANKING CALCULATIONS
     rank_y = []
     total_y, total_db = 0, 0
     for name in chars:
         h = logs.get(name, {})
-        y = parse_xp(h.get(dates['yesterday'], 0))
-        db = parse_xp(h.get(dates['day_before'], 0))
-        if y != 0: rank_y.append((name, y)) # Include deaths in ranking
+        y = parse_xp(h.get(dates['yesterday_iso'], 0))
+        db = parse_xp(h.get(dates['day_before_iso'], 0))
+        if y != 0: rank_y.append((name, y))
         total_y += y; total_db += db
 
-    if rank_y and state.get("last_daily") != dates['yesterday']:
+    if rank_y and state.get("last_daily") != dates['yesterday_iso']:
         rank_y.sort(key=lambda x: x[1], reverse=True)
         change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
-        send_discord_post("Daily Champion", dates['yesterday'], rank_y, total_y, change)
-        state["last_daily"] = dates['yesterday']
+        send_discord_post("Daily Champion", dates['yesterday_iso'], rank_y, total_y, change)
+        state["last_daily"] = dates['yesterday_iso']
         save_json(STATE_PATH, state)
-        print("🚀 Process Complete.")
+        print("🚀 Success!")
 
 if __name__ == "__main__":
     main()
