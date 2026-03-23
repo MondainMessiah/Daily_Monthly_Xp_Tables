@@ -1,24 +1,44 @@
-import os, json, requests, sys
+import os
+import json
+import requests
+import re
+import urllib.parse
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-# --- CONFIG ---
+# --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
 CHAR_FILE = BASE_DIR / "characters.txt"
 LOG_PATH = BASE_DIR / "xp_log.json"
-TOTALS_PATH = BASE_DIR / "xp_totals.json"
 STATE_PATH = BASE_DIR / "post_state.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
-WORLD = "Celesta"
 TIMEZONE = "Europe/London"
 
-# --- COLORS ---
-CLR_GOLD = 0xFFD700
-CLR_SILVER = 0xC0C0C0
-CLR_BRONZE = 0xCD7F32
-CLR_RED = 0xFF0000
-CLR_MAIN = 0x2ecc71 
+# ==========================================
+# 🛠️ GUILDSTATS.EU SCRAPER (HEAT-SEEKING) 🛠️
+# ==========================================
+def fetch_guildstats_gain(name, target_date):
+    url = f"https://guildstats.eu/character?nick={urllib.parse.quote(name)}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code != 200: 
+            return 0
+        
+        # HEAT-SEEKING REGEX
+        # Finds the date, jumps over HTML, grabs the number
+        pattern = rf"{target_date}.*?([+-]?[\d,]+)"
+        match = re.search(pattern, r.text, re.DOTALL)
+        
+        if match:
+            clean_val = match.group(1).replace(',', '').replace('+', '')
+            return int(clean_val)
+    except Exception as e:
+        print(f"⚠️ Error scraping {name}: {e}")
+    return 0
+
+# ==========================================
 
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
@@ -26,22 +46,18 @@ def get_dates():
     return {
         "today": now.strftime("%Y-%m-%d"),
         "yesterday": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
-        "is_monday": now.weekday() == 0,
-        "is_first_of_month": now.day == 1,
+        "day_before": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
         "obj": now
     }
 
 def load_json(path, fallback=None):
     if not path.exists(): return fallback if fallback is not None else {}
     try:
-        with open(path, "r") as f:
-            data = json.load(f)
-            return data if data else (fallback if fallback is not None else {})
+        with open(path, "r") as f: return json.load(f)
     except: return fallback if fallback is not None else {}
 
 def save_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    with open(path, "w") as f: json.dump(data, f, indent=2)
 
 def parse_xp(val):
     try: return int(str(val).replace(",", "").replace("+", "").strip())
@@ -53,161 +69,129 @@ def make_bar(val, max_val):
     return "🟩" * filled + "⬛" * (10 - filled)
 
 # --- DISCORD POSTER ---
-def send_discord_post(title, date_label, ranking, team_total, post_type="daily"):
-    print(f"📡 Posting {title} to Discord...")
-    if not ranking: return
+def send_discord_post(title, date_label, ranking, team_total, team_change):
+    if not ranking:
+        print("⚠️ Discord Post skipped: No players in ranking.")
+        return
     
-    embeds_list = []
-    max_gain = ranking[0]['gain']
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook:
+        print("❌ ERROR: DISCORD_WEBHOOK_URL environment variable is missing!")
+        return
+
+    max_xp = ranking[0][1]
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
-    medal_colors = {0: CLR_GOLD, 1: CLR_SILVER, 2: CLR_BRONZE}
+    fields = []
+    description_addon = ""
 
-    # 1. STREAK LOGIC
-    streak_info_part = ""
-    if post_type == "daily":
-        streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
-        winner = ranking[0]['name']
-        s_data = streaks.get("daily", {"last_winner": "", "count": 0})
-        
-        if s_data["last_winner"] != "" and s_data["last_winner"] != winner:
-            if s_data["count"] >= 2:
-                embeds_list.append({
-                    "title": "⚔️ STREAK BROKEN ⚔️",
-                    "description": f"**{winner}** ended **{s_data['last_winner']}'s** `{s_data['count']}` day streak!",
-                    "color": CLR_RED
-                })
-            s_data["last_winner"], s_data["count"] = winner, 1
-        else:
-            s_data["last_winner"] = winner
-            s_data["count"] = s_data.get("count", 0) + 1
-        
-        save_json(STREAKS_PATH, streaks)
-        s_icon = "👑" if s_data["count"] >= 5 else "🔥"
-        streak_info_part = f"Winner Streak: {s_icon} {s_data['count']} | "
+    # 1. PROCESS STREAKS
+    streaks = load_json(STREAKS_PATH, {"daily": {"last_winner": "", "count": 0}})
+    winner_name = ranking[0][0]
+    daily = streaks.get("daily", {"last_winner": "", "count": 0})
 
-    # 2. PLAYER CARDS
-    for i, item in enumerate(ranking[:3]):
-        name, gain, rank = item['name'], item['gain'], item.get('rank', '???')
-        move = item.get('move', '⏺️')
-        pct = int((gain / max_gain) * 100) if max_gain > 0 else 0
-        move_str = f" ({move})" if move != "⏺️" else ""
-        
-        s_text = f" {s_icon} `{s_data['count']}`" if i == 0 and post_type == "daily" else ""
-        
-        # Black background for World Rank, "earned" removed from XP
-        base_desc = f"`+{gain:,} XP`\n{make_bar(gain, max_gain)} `{pct}%`\n🌍 `World Rank: #{rank}`{move_str}"
-        
-        if i == 0:
-            embed = {
-                "color": medal_colors.get(i, CLR_MAIN),
-                "title": f"🏆 {title} 🏆",
-                # Black background applied to "Winner: Name"
-                "description": f"🗓️ Period: **{date_label}**\n\n🏆 `Winner: {name}`{s_text}\n\n{base_desc}"
-            }
-        else:
-            embed = {
-                "color": medal_colors.get(i, CLR_MAIN),
-                # Black background applied to 2nd/3rd place names
-                "description": f"{medals[i]} `{name}`\n\n{base_desc}"
-            }
-        embeds_list.append(embed)
-
-    # 3. OTHER GAINS & FOOTER
-    others = [f"**{it['name']}** (+{it['gain']:,} XP)" for it in ranking[3:] if it['gain'] > 0]
-    
-    streak_legend = "Streaks: 1-4 🔥 5+ 👑"
-    footer_text = f"Total: {team_total:,} XP | World: {WORLD}\n{streak_info_part}{streak_legend}\n⚠️ Only Top 1000 can be tracked"
-    
-    footer_embed = {"color": CLR_MAIN, "footer": {"text": footer_text}}
-    if others:
-        footer_embed["title"] = "--- Other Gains ---"
-        footer_embed["description"] = "\n".join(others)
+    if daily.get("last_winner") == winner_name:
+        daily["count"] += 1
     else:
-        footer_embed["description"] = "No other significant gains today."
+        if daily.get("last_winner") and daily.get("count", 0) >= 2:
+            description_addon = f"\n⚔️ **{winner_name}** has ended **{daily['last_winner']}'s** `{daily['count']}` day streak!"
+        daily["last_winner"], daily["count"] = winner_name, 1
+    
+    save_json(STREAKS_PATH, streaks)
+    icon = "👑" if daily['count'] >= 5 else "🔥"
+    streak_display = f" {icon} `{daily['count']}`"
 
-    embeds_list.append(footer_embed)
-    requests.post(os.environ.get("DISCORD_WEBHOOK_URL"), json={"embeds": embeds_list})
+    # 2. BUILD TOP 3
+    for i, (name, xp) in enumerate(ranking[:3]):
+        pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
+        s = streak_display if i == 0 else ""
+        fields.append({
+            "name": f"{medals[i]} **{name}**{s}",
+            "value": f"`+{xp:,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
+            "inline": False
+        })
+
+    # 3. OTHER GAINS
+    others = [f"**{n}** (+{v:,} XP)" for n, v in ranking[3:10] if v > 0]
+    if others:
+        fields.append({"name": "--- Other Gains ---", "value": "\n".join(others)})
+
+    # 4. FOOTER
+    footer_text = f"Team Total: {team_total:,} XP ({team_change} vs last daily)\n"
+    footer_text += "🔥 = 1-4 Streak | 👑 = 5+ Streak"
+
+    payload = {
+        "embeds": [{
+            "title": f"🏆 {title} 🏆",
+            "description": f"🗓️ Date: **{date_label}**{description_addon}",
+            "fields": fields,
+            "color": 0x2ecc71,
+            "footer": {"text": footer_text}
+        }]
+    }
+    
+    resp = requests.post(webhook, json=payload)
+    if resp.status_code == 204 or resp.status_code == 200:
+        print("🚀 Discord Post sent successfully!")
+    else:
+        print(f"❌ Failed to post to Discord: {resp.status_code} - {resp.text}")
 
 # --- MAIN ENGINE ---
 def main():
-    print("🚀 Starting Bot Engine...")
-    dates = get_dates(); yest = dates['yesterday']
-    logs = load_json(LOG_PATH); totals = load_json(TOTALS_PATH); state = load_json(STATE_PATH)
+    dates = get_dates()
+    logs = load_json(LOG_PATH)
+    state = load_json(STATE_PATH)
     
-    if not CHAR_FILE.exists(): return
-    with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
-    
-    current_stats = {}; found_count = 0
-    lower_logs = {k.lower(): v for k, v in logs.items()}
-
-    # 1. API LOOP
-    for page in range(1, 21):
-        if found_count == len(chars): break
-        try:
-            r = requests.get(f"https://api.tibiadata.com/v4/highscores/{WORLD}/experience/all/{page}", timeout=15)
-            data = r.json()
-            items = data.get("highscores", {}).get("highscore_list", [])
-            for entry in items:
-                name = entry.get("name")
-                if name and any(name.lower() == c.lower() for c in chars):
-                    curr_xp, curr_rank = entry.get("value", 0), int(entry.get("rank", 0))
-                    last_e = totals.get(name, {"xp": 0, "rank": curr_rank})
-                    if isinstance(last_e, (int, float)): last_e = {"xp": last_e, "rank": curr_rank}
-                    
-                    last_xp, last_rank = last_e.get("xp", 0), last_e.get("rank", curr_rank)
-                    if curr_rank < last_rank: move = f"🔼 {last_rank - curr_rank}"
-                    elif curr_rank > last_rank: move = f"🔽 {curr_rank - last_rank}"
-                    else: move = "⏺️"
-
-                    gain = curr_xp - last_xp if last_xp > 0 else 0
-                    
-                    existing_manual_val = parse_xp(lower_logs.get(name.lower(), {}).get(yest, 0))
-                    if existing_manual_val == 0 and gain > 0:
-                        if name not in logs: logs[name] = {}
-                        logs[name][yest] = f"+{gain:,}"
-                        print(f"   📈 Logged Live API Gain for {name}: {gain:,} XP")
-                    elif existing_manual_val > 0:
-                        print(f"   🔒 Manual Log Locked for {name}: Using {existing_manual_val:,} XP")
-
-                    current_stats[name] = {"xp": curr_xp, "rank": curr_rank, "move": move}
-                    found_count += 1
-        except: break
-
-    totals.update(current_stats); save_json(TOTALS_PATH, totals); save_json(LOG_PATH, logs)
-
-    # 2. DAILY POST
-    if state.get("last_daily") != yest:
-        daily_list = []
-        for name in chars:
-            val = parse_xp(logs.get(name, {}).get(yest, 0))
-            if val > 0:
-                st = current_stats.get(name, {"rank": "???", "move": "⏺️"})
-                daily_list.append({"name": name, "gain": val, "rank": st['rank'], "move": st['move']})
+    if not CHAR_FILE.exists():
+        print("❌ Error: characters.txt not found.")
+        return
         
-        if daily_list:
-            daily_list.sort(key=lambda x: x['gain'], reverse=True)
-            send_discord_post("Daily Champion", yest, daily_list, sum(x['gain'] for x in daily_list), "daily")
-            state["last_daily"] = yest
+    with open(CHAR_FILE) as f: 
+        chars = [l.strip() for l in f if l.strip()]
 
-    # 3. WEEKLY & MONTHLY
-    if dates['is_monday'] and state.get("last_weekly") != yest:
-        l7 = [(dates['obj'] - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 8)]
-        w_list = [{"name": n, "gain": sum(parse_xp(logs.get(n, {}).get(d, 0)) for d in l7), "rank": current_stats.get(n, {}).get("rank", "???")} for n in chars]
-        w_list = [x for x in w_list if x['gain'] > 0]
-        if w_list:
-            w_list.sort(key=lambda x: x['gain'], reverse=True)
-            send_discord_post("Weekly Champion", f"Week ending {yest}", w_list, sum(x['gain'] for x in w_list), "weekly")
-            state["last_weekly"] = yest
+    # --- STEP 1: FRESH SCRAPE (OVERRIDE LOCK) ---
+    print(f"🔍 Fetching gains for {dates['yesterday']}...")
+    for name in chars:
+        gain = fetch_guildstats_gain(name, dates['yesterday'])
+        if name not in logs: logs[name] = {}
+        
+        # Always update the log with what we find on GuildStats
+        if gain != 0:
+            logs[name][dates['yesterday']] = f"+{gain:,}"
+            print(f"✅ {name}: {gain:,} XP (Scraped)")
+        else:
+            # If we find nothing, don't overwrite if there's already data there
+            print(f"⚪ {name}: No update found on GuildStats.")
+    
+    save_json(LOG_PATH, logs)
 
-    if dates['is_first_of_month'] and state.get("last_monthly") != yest:
-        m_label = (dates['obj'] - timedelta(days=1)).strftime("%Y-%m")
-        m_list = [{"name": n, "gain": sum(parse_xp(v) for d, v in logs.get(n, {}).items() if d.startswith(m_label)), "rank": current_stats.get(n, {}).get("rank", "???")} for n in chars]
-        m_list = [x for x in m_list if x['gain'] > 0]
-        if m_list:
-            m_list.sort(key=lambda x: x['gain'], reverse=True)
-            send_discord_post("Monthly Champion", (dates['obj'] - timedelta(days=1)).strftime("%B %Y"), m_list, sum(x['gain'] for x in m_list), "monthly")
-            state["last_monthly"] = yest
+    # --- STEP 2: CALCULATE RANKINGS ---
+    rank_y = []
+    total_y, total_db = 0, 0
 
+    for name in chars:
+        history = logs.get(name, {})
+        val_y = parse_xp(history.get(dates['yesterday'], 0))
+        val_db = parse_xp(history.get(dates['day_before'], 0))
+        
+        if val_y > 0: 
+            rank_y.append((name, val_y))
+        total_y += val_y
+        total_db += val_db
+
+    if not rank_y: 
+        print(f"❌ No XP data found in logs for {dates['yesterday']}. Post aborted.")
+        return
+
+    rank_y.sort(key=lambda x: x[1], reverse=True)
+
+    # --- STEP 3: POST TO DISCORD ---
+    # To force a post for testing, you can comment out the 'if' line below:
+    # if state.get("last_daily") != dates['yesterday']:
+    
+    change = f"{((total_y - total_db)/total_db)*100:+.1f}%" if total_db > 0 else "0%"
+    send_discord_post("Daily Champion", dates['yesterday'], rank_y, total_y, change)
+    
+    state["last_daily"] = dates['yesterday']
     save_json(STATE_PATH, state)
 
 if __name__ == "__main__":
