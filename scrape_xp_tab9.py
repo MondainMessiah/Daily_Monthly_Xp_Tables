@@ -14,7 +14,7 @@ CHAR_FILE = BASE_DIR / "characters.txt"
 LOG_PATH = BASE_DIR / "xp_log.json"
 STATE_PATH = BASE_DIR / "post_state.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
-PB_PATH = BASE_DIR / "personal_bests.json" # <--- Your PB file
+PB_PATH = BASE_DIR / "personal_bests.json"
 TIMEZONE = "Europe/London"
 
 # ==========================================
@@ -43,41 +43,27 @@ def fetch_guildstats_gain(name, dates):
     except: return 0
 
 # ==========================================
-# ⭐ THE PB ENGINE (V31 - Dedicated File)
+# 🔥 PERSISTENCE ENGINES (PB & STREAKS)
 # ==========================================
 def handle_pb_check(name, current_gain):
-    """Reads from personal_bests.json and updates if a record is broken."""
     pb_data = load_json(PB_PATH, {})
-    
-    # Get old PB (if it exists)
     old_pb = pb_data.get(name, 0)
-    
     if current_gain > old_pb:
-        # Save new record immediately
         pb_data[name] = current_gain
         save_json(PB_PATH, pb_data)
-        
-        # Only show the star if they actually had a previous record (prevents star on 1st run)
         return True if old_pb > 0 else False
-        
     return False
 
-# ==========================================
-# 🔥 TRIPLE-TRACK STREAK ENGINE
-# ==========================================
 def update_period_streak(category, winner_name):
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}})
     if category not in all_streaks: all_streaks[category] = {}
-    
     data = all_streaks[category]
     last_winner = data.get("last_winner", "")
     current_count = data.get("count", 0)
-    
     if last_winner == winner_name:
         new_count = current_count + 1
     else:
         new_count = 1
-    
     all_streaks[category] = {"last_winner": winner_name, "count": new_count}
     save_json(STREAKS_PATH, all_streaks)
     
@@ -88,66 +74,68 @@ def update_period_streak(category, winner_name):
     return icon, new_count
 
 # ==========================================
-# 📊 SUMMARY LOGIC
+# 📊 VISUAL POST ENGINE (V34)
 # ==========================================
-def get_summed_xp(logs, chars, days_to_look_back):
-    rankings = []
-    tz = ZoneInfo(TIMEZONE)
-    today = datetime.now(tz)
-    target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, days_to_look_back + 1)]
+def make_bar(val, max_val):
+    if max_val <= 0: return "⬛" * 10
+    filled = max(0, min(10, round((val / max_val) * 10)))
+    return "🟩" * filled + "⬛" * (10 - filled)
 
-    for name in chars:
-        char_history = logs.get(name, {})
-        total_period_xp = 0
-        for d in target_dates:
-            val = char_history.get(d, "0")
-            clean_val = "".join(c for c in str(val) if c.isdigit())
-            if clean_val:
-                num = int(clean_val)
-                total_period_xp += -num if str(val).startswith('-') else num
-        if total_period_xp != 0:
-            rankings.append((name, total_period_xp))
-    rankings.sort(key=lambda x: x[1], reverse=True)
-    return rankings
-
-def send_discord_post(title, ranking, color, streak_cat=None):
+def send_discord_post(title, subtitle, ranking, color, logs, dates, streak_cat=None):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook or not ranking: return
     
     max_xp = ranking[0][1]
-    total_xp = sum(item[1] for item in ranking)
-    fields = []
+    curr_total = sum(item[1] for item in ranking)
     
+    # Calculate % Change (Only for Daily)
+    footer_extra = ""
+    if streak_cat == "daily":
+        prev_total = 0
+        for name, _ in ranking:
+            v = logs.get(name, {}).get(dates['day_before_iso'], "0")
+            clean = "".join(c for c in str(v) if c.isdigit())
+            if clean: prev_total += int(clean)
+        if prev_total > 0:
+            diff = ((curr_total - prev_total) / prev_total) * 100
+            footer_extra = f" ({diff:+.1f}% vs last daily)"
+
     streak_label = ""
     if streak_cat:
         icon, count = update_period_streak(streak_cat, ranking[0][0])
         if count > 1 or streak_cat == "daily":
-            streak_label = f" {icon} `{count}`"
+            streak_label = f" {icon} {count}"
 
-    for i, (name, xp) in enumerate(ranking[:5]):
-        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-        m = medals[i] if i < 5 else "🔹"
-        
-        # ⭐ PB Check using the dedicated file
-        # (We only show stars on the Daily Champion post to keep it special)
-        pb_star = " ⭐️" if (streak_cat == "daily" and handle_pb_check(name, xp)) else ""
-        
-        display_name = f"**{name}**{streak_label}{pb_star}" if (i == 0) else f"**{name}**{pb_star}"
+    fields = []
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (name, xp) in enumerate(ranking[:3]):
+        pb_star = " ⭐" if (streak_cat == "daily" and handle_pb_check(name, xp)) else ""
+        s_label = streak_label if i == 0 else ""
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
-        bar = "🟩" * round(pct/10) + "⬛" * (10 - round(pct/10))
         
         fields.append({
-            "name": f"{m} {display_name}",
-            "value": f"`{xp:+,} XP`\n{bar} `{pct}%`",
-            "inline": False if i < 3 else True
+            "name": f"{medals[i]} {name}{s_label}{pb_star}",
+            "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
+            "inline": False
         })
+
+    others = []
+    for name, xp in ranking[3:10]:
+        pb_star = " ⭐" if (streak_cat == "daily" and handle_pb_check(name, xp)) else ""
+        others.append(f"**{name}** (`{xp:+,} XP`){pb_star}")
+    
+    if others:
+        fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
     payload = {
         "embeds": [{
             "title": f"🏆 {title} 🏆",
+            "description": subtitle,
             "fields": fields,
             "color": color,
-            "footer": {"text": f"Total Team Progress: {total_xp:+,} XP | ⭐️ = New Personal Best"}
+            "footer": {
+                "text": f"Team Total: {curr_total:,} XP{footer_extra}\n⭐ = New PB | 🔥 = 1-4 Streak | 👑 = 5+ Streak"
+            }
         }]
     }
     requests.post(webhook, json=payload)
@@ -157,11 +145,14 @@ def send_discord_post(title, ranking, color, streak_cat=None):
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
+    yesterday_obj = now - timedelta(days=1)
     return {
-        "yesterday_iso": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
+        "yesterday_display": yesterday_obj.strftime("%d-%m-%y"),
+        "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
         "is_monday": now.weekday() == 0,
         "is_first": now.day == 1,
-        "month_name": (now - timedelta(days=1)).strftime("%B")
+        "month_name": yesterday_obj.strftime("%B")
     }
 
 def load_json(path, fallback=None):
@@ -169,8 +160,7 @@ def load_json(path, fallback=None):
     try:
         with open(path, "r") as f: 
             content = f.read().strip()
-            if not content: return fallback
-            return json.loads(content)
+            return json.loads(content) if content else fallback
     except: return fallback if fallback is not None else {}
 
 def save_json(path, data):
@@ -195,18 +185,18 @@ def main():
     
     if scrape_success: save_json(LOG_PATH, logs)
 
-    # 1. WEEKLY
+    # 1. WEEKLY (Mondays)
     if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
         weekly_ranks = get_summed_xp(logs, chars, 7)
         if weekly_ranks:
-            send_discord_post("Weekly Power Ranking", weekly_ranks, 0x3498db, streak_cat="weekly")
+            send_discord_post("Weekly Power Ranking", "📅 Period: **Last 7 Days**", weekly_ranks, 0x3498db, logs, dates, streak_cat="weekly")
             state["last_weekly"] = dates['yesterday_iso']
 
-    # 2. MONTHLY
+    # 2. MONTHLY (1st)
     if dates['is_first'] and state.get("last_monthly") != dates['yesterday_iso']:
         monthly_ranks = get_summed_xp(logs, chars, 31)
         if monthly_ranks:
-            send_discord_post(f"Monthly Champion: {dates['month_name']}", monthly_ranks, 0xf1c40f, streak_cat="monthly")
+            send_discord_post(f"Monthly Champion", f"📅 Month: **{dates['month_name']}**", monthly_ranks, 0xf1c40f, logs, dates, streak_cat="monthly")
             state["last_monthly"] = dates['yesterday_iso']
 
     # 3. DAILY
@@ -219,10 +209,25 @@ def main():
 
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
         daily_ranks.sort(key=lambda x: x[1], reverse=True)
-        send_discord_post("Daily Champion", daily_ranks, 0x2ecc71, streak_cat="daily")
+        send_discord_post("Daily Champion", f"🗓️ Date: **{dates['yesterday_display']}**", daily_ranks, 0x2ecc71, logs, dates, streak_cat="daily")
         state["last_daily"] = dates['yesterday_iso']
 
     save_json(STATE_PATH, state)
+
+def get_summed_xp(logs, chars, days):
+    rankings = []
+    today = datetime.now(ZoneInfo(TIMEZONE))
+    target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, days + 1)]
+    for name in chars:
+        char_history = logs.get(name, {})
+        total = 0
+        for d in target_dates:
+            val = char_history.get(d, "0")
+            clean = "".join(c for c in str(val) if c.isdigit())
+            if clean: total += int(clean) * (-1 if str(val).startswith('-') else 1)
+        if total != 0: rankings.append((name, total))
+    rankings.sort(key=lambda x: x[1], reverse=True)
+    return rankings
 
 if __name__ == "__main__":
     main()
