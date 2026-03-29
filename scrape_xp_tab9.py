@@ -61,12 +61,16 @@ def update_personal_best(name, current_gain):
     return False
 
 # ==========================================
-# 🔥 THE DYNASTY ENGINE (V42)
+# 🔥 THE DYNASTY ENGINE (V43 - Robustified)
 # ==========================================
 def update_period_streak(category, winner_name):
-    """Manages streaks and the permanent Reigning King status."""
+    """Manages streaks and Reigning King status with safety checks."""
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
     
+    # Safety Check: Ensure the reigning_king key exists in the loaded data
+    if "reigning_king" not in all_streaks:
+        all_streaks["reigning_king"] = ""
+
     data = all_streaks.get(category, {})
     last_winner = data.get("last_winner", "")
     last_count = data.get("count", 0)
@@ -74,7 +78,7 @@ def update_period_streak(category, winner_name):
     
     broken_msg, crown_msg, event_gif = "", "", None
 
-    # Update Consecutive Win Count
+    # Update Win Count
     if last_winner == winner_name:
         new_count = last_count + 1
     else:
@@ -85,7 +89,7 @@ def update_period_streak(category, winner_name):
             event_gif = BROKEN_GIF
         new_count = 1
     
-    # Check for Coronation (Daily Only)
+    # Coronation (Daily Only)
     if category == "daily":
         if new_count >= 5:
             if winner_name != reigning_king:
@@ -95,18 +99,18 @@ def update_period_streak(category, winner_name):
                 crown_msg = f"\n👑 **THE KING EXTENDS HIS REIGN!** 👑\n**{winner_name}** is on a **{new_count} day** win streak!"
             event_gif = KING_GIF
 
-    # Save data
     all_streaks[category] = {"last_winner": winner_name, "count": new_count}
     save_json(STREAKS_PATH, all_streaks)
     
-    # Return visual info for the winner
+    # Visual Logic
     icon = ""
+    updated_king = all_streaks.get("reigning_king", "")
     if category == "daily":
-        icon = "👑" if winner_name == all_streaks["reigning_king"] else "🔥"
+        icon = "👑" if winner_name == updated_king else "🔥"
     elif new_count > 1:
         icon = "🔥"
         
-    return icon, new_count, broken_msg, crown_msg, event_gif, all_streaks["reigning_king"]
+    return icon, new_count, broken_msg, crown_msg, event_gif, updated_king
 
 # ==========================================
 # 📊 VISUAL POST ENGINE
@@ -126,7 +130,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         if count > 1 or streak_cat == "daily":
             streak_label = f" {icon} {count}"
     else:
-        # Just check who is king for non-streak posts
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
     full_desc = subtitle
@@ -137,8 +140,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     medals = ["🥇", "🥈", "🥉"]
     for i, (name, xp) in enumerate(ranking[:3]):
         pb_star = " ⭐️" if name in pb_list else ""
-        
-        # Determine labels: Winner gets the streak count, King gets a permanent crown
         king_tag = " 👑" if (name == current_king and (i != 0 or streak_cat != "daily")) else ""
         s_label = streak_label if (i == 0 and streak_cat) else king_tag
         
