@@ -23,17 +23,22 @@ KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
 BROKEN_GIF = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3JueXZueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/hStvd5LiWCF3Y6No7C/giphy.gif"
 
 # ==========================================
-# 🛠️ SCRAPER & PB ENGINE
+# 🛠️ THE ROW-LOCK SNIPER (V44 - AUTO-CAPITALIZE)
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url: return "NO_URL"
-    formatted_name = name.replace(' ', '+')
+    
+    # 🛠️ FIX: Auto-capitalize every word and join with '+' for the URL
+    formatted_name = "+".join([word.capitalize() for word in name.split()])
+    
     target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
+    
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
+        
         rows = r.text.split('<tr')
         for row in rows:
             if dates['yesterday_iso'] in row:
@@ -49,6 +54,9 @@ def fetch_guildstats_gain(name, dates):
         return 0
     except: return 0
 
+# ==========================================
+# ⭐ PB & STREAK ENGINES
+# ==========================================
 def update_personal_best(name, current_gain):
     pb_data = load_json(PB_PATH, {})
     current_gain = int(current_gain)
@@ -60,16 +68,9 @@ def update_personal_best(name, current_gain):
         return True if old_pb > 0 else False
     return False
 
-# ==========================================
-# 🔥 THE DYNASTY ENGINE (V43 - Robustified)
-# ==========================================
 def update_period_streak(category, winner_name):
-    """Manages streaks and Reigning King status with safety checks."""
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
-    
-    # Safety Check: Ensure the reigning_king key exists in the loaded data
-    if "reigning_king" not in all_streaks:
-        all_streaks["reigning_king"] = ""
+    if "reigning_king" not in all_streaks: all_streaks["reigning_king"] = ""
 
     data = all_streaks.get(category, {})
     last_winner = data.get("last_winner", "")
@@ -78,38 +79,30 @@ def update_period_streak(category, winner_name):
     
     broken_msg, crown_msg, event_gif = "", "", None
 
-    # Update Win Count
     if last_winner == winner_name:
         new_count = last_count + 1
     else:
         if last_count >= 2:
             broken_msg = f"\n💔 **{last_winner}**'s streak of **{last_count}** was broken by **{winner_name}**!"
             if last_winner == reigning_king:
-                broken_msg += " The King has fallen, but the crown remains in the vault..."
+                broken_msg += " The King has fallen..."
             event_gif = BROKEN_GIF
         new_count = 1
     
-    # Coronation (Daily Only)
     if category == "daily":
         if new_count >= 5:
             if winner_name != reigning_king:
-                crown_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne with a 5-day streak!"
+                crown_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne!"
                 all_streaks["reigning_king"] = winner_name
             else:
-                crown_msg = f"\n👑 **THE KING EXTENDS HIS REIGN!** 👑\n**{winner_name}** is on a **{new_count} day** win streak!"
+                crown_msg = f"\n👑 **THE KING EXTENDS HIS REIGN!** 👑\n**{winner_name}** is on a **{new_count} day** streak!"
             event_gif = KING_GIF
 
     all_streaks[category] = {"last_winner": winner_name, "count": new_count}
     save_json(STREAKS_PATH, all_streaks)
     
-    # Visual Logic
-    icon = ""
     updated_king = all_streaks.get("reigning_king", "")
-    if category == "daily":
-        icon = "👑" if winner_name == updated_king else "🔥"
-    elif new_count > 1:
-        icon = "🔥"
-        
+    icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count > 1 or category == "daily" else "")
     return icon, new_count, broken_msg, crown_msg, event_gif, updated_king
 
 # ==========================================
@@ -142,19 +135,17 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         pb_star = " ⭐️" if name in pb_list else ""
         king_tag = " 👑" if (name == current_king and (i != 0 or streak_cat != "daily")) else ""
         s_label = streak_label if (i == 0 and streak_cat) else king_tag
-        
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         fields.append({
             "name": f"{medals[i]} {name}{s_label}{pb_star}",
-            "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
+            "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%` icon",
             "inline": False
         })
 
     others = []
     for name, xp in ranking[3:10]:
-        pb_star = " ⭐️" if name in pb_list else ""
         king_tag = " 👑" if name == current_king else ""
-        others.append(f"**{name}**{king_tag} (`{xp:+,} XP`){pb_star}")
+        others.append(f"**{name}**{king_tag} (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}")
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
     embed = {
@@ -190,7 +181,6 @@ def get_dates():
     return {
         "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
         "yesterday_display": yesterday_obj.strftime("%d-%m-%y"),
-        "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
         "is_monday": now.weekday() == 0, "is_first": now.day == 1,
         "month_name": yesterday_obj.strftime("%B")
     }
