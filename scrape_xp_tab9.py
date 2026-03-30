@@ -137,7 +137,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         s_label = streak_label if (i == 0 and streak_cat) else king_tag
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         
-        # 🛠️ FIXED: Removed the stray "icon" text from the value field below
         fields.append({
             "name": f"{medals[i]} {name}{s_label}{pb_star}",
             "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
@@ -168,7 +167,7 @@ def load_json(path, fallback=None):
             if not content: return fallback
             return json.loads(content)
     except json.JSONDecodeError:
-        print(f"❌ ERROR: {path.name} has invalid JSON! Please check brackets.")
+        print(f"❌ ERROR: {path.name} has invalid JSON!")
         return fallback if fallback is not None else {}
     except: return fallback if fallback is not None else {}
 
@@ -223,16 +222,19 @@ def main():
     
     save_json(LOG_PATH, logs)
 
+    # 🛠️ Weekly XP Totals - Monday
     if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
         r = get_summed_xp(logs, chars, 7)
-        if r: send_discord_post("Weekly Power Ranking", "📅 Period: **Last 7 Days**", r, 0x3498db, dates, "weekly")
+        if r: send_discord_post("Weekly XP Totals", "🗓️ Period: **Last 7 Days**", r, 0x3498db, dates, "weekly")
         state["last_weekly"] = dates['yesterday_iso']
 
+    # 🛠️ Monthly XP Totals - 1st
     if dates['is_first'] and state.get("last_monthly") != dates['yesterday_iso']:
         r = get_summed_xp(logs, chars, 31)
-        if r: send_discord_post("Monthly Champion", f"📅 Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
+        if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
         state["last_monthly"] = dates['yesterday_iso']
 
+    # Daily Champion
     daily_ranks = []
     for name in chars:
         v = logs.get(name, {}).get(dates['yesterday_iso'], "0")
