@@ -23,22 +23,17 @@ KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
 BROKEN_GIF = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3JueXZueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/hStvd5LiWCF3Y6No7C/giphy.gif"
 
 # ==========================================
-# 🛠️ THE ROW-LOCK SNIPER (V44 - AUTO-CAPITALIZE)
+# 🛠️ THE ROW-LOCK SNIPER
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url: return "NO_URL"
-    
-    # 🛠️ FIX: Auto-capitalize every word and join with '+' for the URL
     formatted_name = "+".join([word.capitalize() for word in name.split()])
-    
     target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
-    
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
-        
         rows = r.text.split('<tr')
         for row in rows:
             if dates['yesterday_iso'] in row:
@@ -108,6 +103,11 @@ def update_period_streak(category, winner_name):
 # ==========================================
 # 📊 VISUAL POST ENGINE
 # ==========================================
+def make_bar(val, max_val):
+    if max_val <= 0: return "⬛" * 10
+    filled = max(0, min(10, round((val / max_val) * 10)))
+    return "🟩" * filled + "⬛" * (10 - filled)
+
 def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, pb_list=None):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook or not ranking: return
@@ -136,9 +136,11 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         king_tag = " 👑" if (name == current_king and (i != 0 or streak_cat != "daily")) else ""
         s_label = streak_label if (i == 0 and streak_cat) else king_tag
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
+        
+        # 🛠️ FIXED: Removed the stray "icon" text from the value field below
         fields.append({
             "name": f"{medals[i]} {name}{s_label}{pb_star}",
-            "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%` icon",
+            "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
             "inline": False
         })
 
@@ -156,23 +158,25 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     requests.post(webhook, json={"embeds": [embed]})
 
 # ==========================================
-# ⚙️ HELPERS
+# ⚙️ ROBUST HELPERS
 # ==========================================
-def make_bar(val, max_val):
-    if max_val <= 0: return "⬛" * 10
-    filled = max(0, min(10, round((val / max_val) * 10)))
-    return "🟩" * filled + "⬛" * (10 - filled)
-
 def load_json(path, fallback=None):
     if not path.exists(): return fallback if fallback is not None else {}
     try:
         with open(path, "r") as f:
             content = f.read().strip()
-            return json.loads(content) if content else fallback
+            if not content: return fallback
+            return json.loads(content)
+    except json.JSONDecodeError:
+        print(f"❌ ERROR: {path.name} has invalid JSON! Please check brackets.")
+        return fallback if fallback is not None else {}
     except: return fallback if fallback is not None else {}
 
 def save_json(path, data):
-    with open(path, "w") as f: json.dump(data, f, indent=2)
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+    except: print(f"❌ Could not save {path.name}!")
 
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
@@ -181,6 +185,7 @@ def get_dates():
     return {
         "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
         "yesterday_display": yesterday_obj.strftime("%d-%m-%y"),
+        "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
         "is_monday": now.weekday() == 0, "is_first": now.day == 1,
         "month_name": yesterday_obj.strftime("%B")
     }
