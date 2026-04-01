@@ -2,10 +2,10 @@ name: Tibia XP Tracker
 
 on:
   schedule:
-    # 08:45 UTC = 09:45 AM UK (BST)
+    # 08:25 UTC = 09:25 AM UK (BST)
     # Shifting back by 1 hour to account for the UK's BST +1 offset
     # and GitHub's typical morning scheduling delay.
-    - cron: '45 8 * * *'
+    - cron: '25 8 * * *'
   workflow_dispatch: # Allows you to run the bot manually via the "Actions" tab
 
 permissions:
