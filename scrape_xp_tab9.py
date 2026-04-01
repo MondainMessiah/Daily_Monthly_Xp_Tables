@@ -157,8 +157,41 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     requests.post(webhook, json={"embeds": [embed]})
 
 # ==========================================
-# ⚙️ ROBUST HELPERS
+# ⚙️ ROBUST HELPERS (V49 - Updated Filter)
 # ==========================================
+def get_summed_xp(logs, chars, days=None, month_prefix=None):
+    """Calculates XP rankings using either a rolling day count or a strict month filter."""
+    rankings = []
+    target_dates = []
+
+    if month_prefix:
+        # Strict Month Filter (e.g., "2026-03")
+        for name in chars:
+            char_history = logs.get(name, {})
+            total = 0
+            for date_str, v in char_history.items():
+                if date_str.startswith(month_prefix):
+                    clean = "".join(c for c in str(v) if c.isdigit())
+                    if clean:
+                        total += int(clean) * (-1 if str(v).startswith('-') else 1)
+            if total != 0: rankings.append((name, total))
+    else:
+        # Rolling Days (Weekly)
+        today = datetime.now(ZoneInfo(TIMEZONE))
+        target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, (days or 7) + 1)]
+        for name in chars:
+            char_history = logs.get(name, {})
+            total = 0
+            for d in target_dates:
+                v = char_history.get(d, "0")
+                clean = "".join(c for c in str(v) if c.isdigit())
+                if clean:
+                    total += int(clean) * (-1 if str(v).startswith('-') else 1)
+            if total != 0: rankings.append((name, total))
+
+    rankings.sort(key=lambda x: x[1], reverse=True)
+    return rankings
+
 def load_json(path, fallback=None):
     if not path.exists(): return fallback if fallback is not None else {}
     try:
@@ -166,16 +199,10 @@ def load_json(path, fallback=None):
             content = f.read().strip()
             if not content: return fallback
             return json.loads(content)
-    except json.JSONDecodeError:
-        print(f"❌ ERROR: {path.name} has invalid JSON!")
-        return fallback if fallback is not None else {}
     except: return fallback if fallback is not None else {}
 
 def save_json(path, data):
-    try:
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
-    except: print(f"❌ Could not save {path.name}!")
+    with open(path, "w") as f: json.dump(data, f, indent=2)
 
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
@@ -184,25 +211,11 @@ def get_dates():
     return {
         "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
         "yesterday_display": yesterday_obj.strftime("%d-%m-%y"),
-        "day_before_iso": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
-        "is_monday": now.weekday() == 0, "is_first": now.day == 1,
+        "month_filter": yesterday_obj.strftime("%Y-%m"), # e.g. "2026-03"
+        "is_monday": now.weekday() == 0, 
+        "is_first": now.day == 1,
         "month_name": yesterday_obj.strftime("%B")
     }
-
-def get_summed_xp(logs, chars, days):
-    rankings = []
-    today = datetime.now(ZoneInfo(TIMEZONE))
-    target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, days + 1)]
-    for name in chars:
-        char_history = logs.get(name, {})
-        total = 0
-        for d in target_dates:
-            v = char_history.get(d, "0")
-            clean = "".join(c for c in str(v) if c.isdigit())
-            if clean: total += int(clean) * (-1 if str(v).startswith('-') else 1)
-        if total != 0: rankings.append((name, total))
-    rankings.sort(key=lambda x: x[1], reverse=True)
-    return rankings
 
 def main():
     dates = get_dates()
@@ -222,15 +235,15 @@ def main():
     
     save_json(LOG_PATH, logs)
 
-    # 🛠️ Weekly XP Totals - Monday
+    # Weekly XP Totals - Rolling 7 Days
     if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
-        r = get_summed_xp(logs, chars, 7)
+        r = get_summed_xp(logs, chars, days=7)
         if r: send_discord_post("Weekly XP Totals", "🗓️ Period: **Last 7 Days**", r, 0x3498db, dates, "weekly")
         state["last_weekly"] = dates['yesterday_iso']
 
-    # 🛠️ Monthly XP Totals - 1st
+    # Monthly XP Totals - Strict Calendar Month
     if dates['is_first'] and state.get("last_monthly") != dates['yesterday_iso']:
-        r = get_summed_xp(logs, chars, 31)
+        r = get_summed_xp(logs, chars, month_prefix=dates['month_filter'])
         if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
         state["last_monthly"] = dates['yesterday_iso']
 
