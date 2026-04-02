@@ -23,14 +23,18 @@ KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
 BROKEN_GIF = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3JueXZueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/hStvd5LiWCF3Y6No7C/giphy.gif"
 
 # ==========================================
-# 🛠️ THE ROW-LOCK SNIPER
+# 🛠️ THE ROW-LOCK SNIPER (Auto-Capitalization)
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url: return "NO_URL"
+    
+    # Auto-capitalize names (e.g., "the monk" -> "The+Monk") for the URL
     formatted_name = "+".join([word.capitalize() for word in name.split()])
+    
     target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
+    
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
@@ -50,19 +54,28 @@ def fetch_guildstats_gain(name, dates):
     except: return 0
 
 # ==========================================
-# ⭐ PB & STREAK ENGINES
+# ⭐ ALL-TIME PB ENGINE (V50)
 # ==========================================
 def update_personal_best(name, current_gain):
+    """Checks if today's gain is the best ever recorded in character history."""
     pb_data = load_json(PB_PATH, {})
     current_gain = int(current_gain)
+    
     if current_gain <= 0: return False
-    old_pb = pb_data.get(name, 0)
-    if current_gain > old_pb:
+    
+    # Retrieves the lifetime high from the permanent JSON file
+    all_time_high = pb_data.get(name, 0)
+    
+    if current_gain > all_time_high:
         pb_data[name] = current_gain
         save_json(PB_PATH, pb_data)
-        return True if old_pb > 0 else False
+        # Only show a star if they beat a pre-existing record (prevents star on Day 1)
+        return True if all_time_high > 0 else False
     return False
 
+# ==========================================
+# 🔥 THE DYNASTY ENGINE (Crowns & Streaks)
+# ==========================================
 def update_period_streak(category, winner_name):
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
     if "reigning_king" not in all_streaks: all_streaks["reigning_king"] = ""
@@ -151,29 +164,22 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
 
     embed = {
         "title": f"🏆 {title} 🏆", "description": full_desc, "fields": fields, "color": color,
-        "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = New PB | 🔥 = Streak | 👑 = Reigning King"}
+        "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}
     }
     if final_gif: embed["image"] = {"url": final_gif}
     requests.post(webhook, json={"embeds": [embed]})
 
 # ==========================================
-# ⚙️ ROBUST HELPERS (V49 - Updated Filter)
+# ⚙️ ROBUST HELPERS (Strict Month Logic)
 # ==========================================
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
-    """Calculates XP rankings using either a rolling day count or a strict month filter."""
     rankings = []
-    target_dates = []
-
     if month_prefix:
-        # Strict Month Filter (e.g., "2026-03")
+        # Strict Calendar Month Filter
         for name in chars:
             char_history = logs.get(name, {})
-            total = 0
-            for date_str, v in char_history.items():
-                if date_str.startswith(month_prefix):
-                    clean = "".join(c for c in str(v) if c.isdigit())
-                    if clean:
-                        total += int(clean) * (-1 if str(v).startswith('-') else 1)
+            total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1)
+                        for d, v in char_history.items() if d.startswith(month_prefix))
             if total != 0: rankings.append((name, total))
     else:
         # Rolling Days (Weekly)
@@ -181,12 +187,8 @@ def get_summed_xp(logs, chars, days=None, month_prefix=None):
         target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, (days or 7) + 1)]
         for name in chars:
             char_history = logs.get(name, {})
-            total = 0
-            for d in target_dates:
-                v = char_history.get(d, "0")
-                clean = "".join(c for c in str(v) if c.isdigit())
-                if clean:
-                    total += int(clean) * (-1 if str(v).startswith('-') else 1)
+            total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1)
+                        for d in target_dates if (v := char_history.get(d)) is not None)
             if total != 0: rankings.append((name, total))
 
     rankings.sort(key=lambda x: x[1], reverse=True)
@@ -197,8 +199,7 @@ def load_json(path, fallback=None):
     try:
         with open(path, "r") as f:
             content = f.read().strip()
-            if not content: return fallback
-            return json.loads(content)
+            return json.loads(content) if content else fallback
     except: return fallback if fallback is not None else {}
 
 def save_json(path, data):
@@ -211,7 +212,7 @@ def get_dates():
     return {
         "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
         "yesterday_display": yesterday_obj.strftime("%d-%m-%y"),
-        "month_filter": yesterday_obj.strftime("%Y-%m"), # e.g. "2026-03"
+        "month_filter": yesterday_obj.strftime("%Y-%m"), 
         "is_monday": now.weekday() == 0, 
         "is_first": now.day == 1,
         "month_name": yesterday_obj.strftime("%B")
