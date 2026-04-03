@@ -23,18 +23,14 @@ KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
 BROKEN_GIF = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3JueXZueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/hStvd5LiWCF3Y6No7C/giphy.gif"
 
 # ==========================================
-# 🛠️ THE ROW-LOCK SNIPER (Auto-Capitalization)
+# 🛠️ THE ROW-LOCK SNIPER
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
     if not bridge_url: return "NO_URL"
-    
-    # Auto-capitalize names (e.g., "the monk" -> "The+Monk") for the URL
     formatted_name = "+".join([word.capitalize() for word in name.split()])
-    
     target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
-    
     try:
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
@@ -54,27 +50,21 @@ def fetch_guildstats_gain(name, dates):
     except: return 0
 
 # ==========================================
-# ⭐ ALL-TIME PB ENGINE (V50)
+# ⭐ ALL-TIME PB ENGINE (V51)
 # ==========================================
 def update_personal_best(name, current_gain):
-    """Checks if today's gain is the best ever recorded in character history."""
     pb_data = load_json(PB_PATH, {})
     current_gain = int(current_gain)
-    
     if current_gain <= 0: return False
-    
-    # Retrieves the lifetime high from the permanent JSON file
     all_time_high = pb_data.get(name, 0)
-    
     if current_gain > all_time_high:
         pb_data[name] = current_gain
         save_json(PB_PATH, pb_data)
-        # Only show a star if they beat a pre-existing record (prevents star on Day 1)
         return True if all_time_high > 0 else False
     return False
 
 # ==========================================
-# 🔥 THE DYNASTY ENGINE (Crowns & Streaks)
+# 🔥 THE DYNASTY ENGINE (V51 - CLEAN DAY 1)
 # ==========================================
 def update_period_streak(category, winner_name):
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
@@ -110,7 +100,8 @@ def update_period_streak(category, winner_name):
     save_json(STREAKS_PATH, all_streaks)
     
     updated_king = all_streaks.get("reigning_king", "")
-    icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count > 1 or category == "daily" else "")
+    # 🛠️ FIXED: icon only shows 🔥 if streak is 2 or more
+    icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count >= 2 else "")
     return icon, new_count, broken_msg, crown_msg, event_gif, updated_king
 
 # ==========================================
@@ -133,8 +124,10 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     if streak_cat:
         icon, count, b_msg, c_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
         broken_msg, crown_msg, final_gif, current_king = b_msg, c_msg, e_gif, king
-        if count > 1 or streak_cat == "daily":
+        if count >= 2 or (count >= 5 and streak_cat == "daily"):
             streak_label = f" {icon} {count}"
+        elif count == 1 and winner_is_king := (ranking[0][0] == current_king):
+             streak_label = f" 👑" # Show crown even on day 1 if they are the king
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
@@ -170,19 +163,17 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     requests.post(webhook, json={"embeds": [embed]})
 
 # ==========================================
-# ⚙️ ROBUST HELPERS (Strict Month Logic)
+# ⚙️ HELPERS
 # ==========================================
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
     rankings = []
     if month_prefix:
-        # Strict Calendar Month Filter
         for name in chars:
             char_history = logs.get(name, {})
             total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1)
                         for d, v in char_history.items() if d.startswith(month_prefix))
             if total != 0: rankings.append((name, total))
     else:
-        # Rolling Days (Weekly)
         today = datetime.now(ZoneInfo(TIMEZONE))
         target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, (days or 7) + 1)]
         for name in chars:
@@ -190,7 +181,6 @@ def get_summed_xp(logs, chars, days=None, month_prefix=None):
             total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1)
                         for d in target_dates if (v := char_history.get(d)) is not None)
             if total != 0: rankings.append((name, total))
-
     rankings.sort(key=lambda x: x[1], reverse=True)
     return rankings
 
@@ -213,8 +203,7 @@ def get_dates():
         "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"),
         "yesterday_display": yesterday_obj.strftime("%d-%m-%y"),
         "month_filter": yesterday_obj.strftime("%Y-%m"), 
-        "is_monday": now.weekday() == 0, 
-        "is_first": now.day == 1,
+        "is_monday": now.weekday() == 0, "is_first": now.day == 1,
         "month_name": yesterday_obj.strftime("%B")
     }
 
@@ -236,19 +225,16 @@ def main():
     
     save_json(LOG_PATH, logs)
 
-    # Weekly XP Totals - Rolling 7 Days
     if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
         r = get_summed_xp(logs, chars, days=7)
         if r: send_discord_post("Weekly XP Totals", "🗓️ Period: **Last 7 Days**", r, 0x3498db, dates, "weekly")
         state["last_weekly"] = dates['yesterday_iso']
 
-    # Monthly XP Totals - Strict Calendar Month
     if dates['is_first'] and state.get("last_monthly") != dates['yesterday_iso']:
         r = get_summed_xp(logs, chars, month_prefix=dates['month_filter'])
         if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
         state["last_monthly"] = dates['yesterday_iso']
 
-    # Daily Champion
     daily_ranks = []
     for name in chars:
         v = logs.get(name, {}).get(dates['yesterday_iso'], "0")
