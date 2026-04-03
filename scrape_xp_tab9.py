@@ -50,7 +50,7 @@ def fetch_guildstats_gain(name, dates):
     except: return 0
 
 # ==========================================
-# ⭐ ALL-TIME PB ENGINE (V51)
+# ⭐ ALL-TIME PB ENGINE
 # ==========================================
 def update_personal_best(name, current_gain):
     pb_data = load_json(PB_PATH, {})
@@ -64,7 +64,7 @@ def update_personal_best(name, current_gain):
     return False
 
 # ==========================================
-# 🔥 THE DYNASTY ENGINE (V51 - CLEAN DAY 1)
+# 🔥 THE DYNASTY ENGINE
 # ==========================================
 def update_period_streak(category, winner_name):
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
@@ -100,7 +100,6 @@ def update_period_streak(category, winner_name):
     save_json(STREAKS_PATH, all_streaks)
     
     updated_king = all_streaks.get("reigning_king", "")
-    # 🛠️ FIXED: icon only shows 🔥 if streak is 2 or more
     icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count >= 2 else "")
     return icon, new_count, broken_msg, crown_msg, event_gif, updated_king
 
@@ -124,10 +123,12 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     if streak_cat:
         icon, count, b_msg, c_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
         broken_msg, crown_msg, final_gif, current_king = b_msg, c_msg, e_gif, king
-        if count >= 2 or (count >= 5 and streak_cat == "daily"):
+        
+        # 🛠️ FIXED SYNTAX HERE:
+        if count >= 2:
             streak_label = f" {icon} {count}"
-        elif count == 1 and winner_is_king := (ranking[0][0] == current_king):
-             streak_label = f" 👑" # Show crown even on day 1 if they are the king
+        elif streak_cat == "daily" and ranking[0][0] == current_king:
+             streak_label = f" 👑" 
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
