@@ -20,7 +20,8 @@ MAX_XP_THRESHOLD = 200000000
 
 # --- 🎬 GIF CONFIGURATION ---
 KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
-BROKEN_GIF = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3JueXZueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueXpueCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/hStvd5LiWCF3Y6No7C/giphy.gif"
+# New "Owned" Sudden Death GIF for broken streaks
+BROKEN_GIF = "https://media.tenor.com/PZcZ7C1K_J0AAAAC/tibia-owned.gif"
 
 # ==========================================
 # 🛠️ THE ROW-LOCK SNIPER
@@ -100,12 +101,11 @@ def update_period_streak(category, winner_name):
     save_json(STREAKS_PATH, all_streaks)
     
     updated_king = all_streaks.get("reigning_king", "")
-    # 👑 King icon has no number, 🔥 Streak icon has numbers
     icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count >= 2 else "")
     return icon, new_count, broken_msg, crown_msg, event_gif, updated_king
 
 # ==========================================
-# 📊 VISUAL POST ENGINE (V53 - Split Embed)
+# 📊 VISUAL POST ENGINE
 # ==========================================
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
@@ -125,7 +125,7 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         icon, count, b_msg, c_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
         broken_msg, crown_msg, final_gif, current_king = b_msg, c_msg, e_gif, king
         
-        # 🛠️ FIXED: Remove number if King icon, keep number for 🔥 icon
+        # 👑 King icon has no number, 🔥 Streak icon has numbers
         if icon == "👑":
             streak_label = f" {icon}"
         elif count >= 2:
@@ -157,26 +157,21 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         others.append(f"**{name}**{king_tag} (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}")
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
-    # 🎬 RESTRUCTURED EMBEDS:
-    # If there is a GIF, we send two embeds so the GIF is under the announcement.
+    # 🎬 SPLIT EMBED SYSTEM: Image goes directly under the text announcement
     embed_list = []
-    
     if final_gif:
-        # Celebration Embed (Text + GIF)
         embed_list.append({
             "title": f"🏆 {title} 🏆",
             "description": full_desc,
             "image": {"url": final_gif},
             "color": color
         })
-        # Ranking Embed (Fields + Footer)
         embed_list.append({
             "fields": fields,
             "color": color,
             "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}
         })
     else:
-        # Standard Single Embed (No GIF)
         embed_list.append({
             "title": f"🏆 {title} 🏆",
             "description": full_desc,
