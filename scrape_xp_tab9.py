@@ -18,7 +18,7 @@ PB_PATH = BASE_DIR / "personal_bests.json"
 TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
 
-# --- 🎬 GIF CONFIGURATION ---
+# --- 🎬 GIF CONFIGURATION (Direct Media Links) ---
 KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
 BROKEN_GIF = "https://media.tenor.com/PZcZ7C1K_J0AAAAC/tibia-owned.gif"
 PB_GIF = "https://media.tenor.com/Y36Wc8F4A_0AAAAC/record-broken-new-record.gif"
@@ -58,7 +58,7 @@ def update_personal_best(name, current_gain):
     if current_gain > all_time_high:
         pb_data[name] = current_gain
         save_json(PB_PATH, pb_data)
-        return True if all_time_high > 0 else False
+        return True
     return False
 
 def update_period_streak(category, winner_name):
@@ -69,24 +69,25 @@ def update_period_streak(category, winner_name):
     reigning_king = all_streaks.get("reigning_king", "")
     
     broken_msg, crown_msg, event_gif = "", "", None
-    if last_winner == winner_name:
-        new_count = last_count + 1
-    else:
+    if last_winner != winner_name:
         if last_count >= 2:
             broken_msg = f"\n💔 **{last_winner}**'s streak of **{last_count}** was broken by **{winner_name}**!"
             if last_winner == reigning_king:
                 broken_msg += " The King has fallen..."
             event_gif = BROKEN_GIF
         new_count = 1
+    else:
+        new_count = last_count + 1
     
     if category == "daily":
         if new_count >= 5:
             if winner_name != reigning_king:
                 crown_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne!"
                 all_streaks["reigning_king"] = winner_name
+                event_gif = KING_GIF
             else:
                 crown_msg = f"\n👑 **THE KING EXTENDS HIS REIGN!** 👑\n**{winner_name}** is on a **{new_count} day** streak!"
-            event_gif = KING_GIF
+                event_gif = KING_GIF
 
     all_streaks[category] = {"last_winner": winner_name, "count": new_count}
     save_json(STREAKS_PATH, all_streaks)
@@ -116,6 +117,7 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
+    # GIF Priority: Broken Streak/Crown > Personal Best
     if not final_gif and pb_list and ranking[0][0] in pb_list:
         final_gif = PB_GIF
 
@@ -140,11 +142,28 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
     embed_list = []
+    # 🎬 SPLIT EMBED SYSTEM: GIF appears under text but above table
     if final_gif:
-        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "image": {"url": final_gif}, "color": color})
-        embed_list.append({"fields": fields, "color": color, "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}})
+        print(f"🎬 Sending celebration GIF: {final_gif}")
+        embed_list.append({
+            "title": f"🏆 {title} 🏆",
+            "description": full_desc,
+            "image": {"url": final_gif},
+            "color": color
+        })
+        embed_list.append({
+            "fields": fields,
+            "color": color,
+            "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}
+        })
     else:
-        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "fields": fields, "color": color, "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}})
+        embed_list.append({
+            "title": f"🏆 {title} 🏆",
+            "description": full_desc,
+            "fields": fields,
+            "color": color,
+            "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}
+        })
 
     requests.post(webhook, json={"embeds": embed_list})
 
@@ -195,26 +214,20 @@ def main():
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
     print(f"🌐 Scraping {dates['yesterday_iso']}...")
-    
     current_scrapes = {}
     daily_pb_achievers = []
     total_non_zero = 0
 
-    # 🛠️ PRE-SCRAPE PHASE
     for name in chars:
         gain = fetch_guildstats_gain(name, dates)
         current_scrapes[name] = gain
-        if gain != 0:
-            total_non_zero += 1
+        if gain != 0: total_non_zero += 1
         time.sleep(1.5)
 
-    # 🛡️ THE ANTI-ZERO SHIELD
     if total_non_zero == 0:
-        print(f"🛑 ANTI-ZERO TRIGGERED: Everyone is at 0 XP for {dates['yesterday_iso']}.")
-        print("This usually means GuildStats hasn't updated yet. No data will be saved.")
-        return # ABORT MISSION
+        print(f"🛑 ANTI-ZERO TRIGGERED: Website likely hasn't updated.")
+        return 
 
-    # 🏆 DATA PROCESSING PHASE (Only runs if data exists)
     for name, gain in current_scrapes.items():
         if name not in logs: logs[name] = {}
         logs[name][dates['yesterday_iso']] = f"{gain:+,}"
@@ -233,16 +246,13 @@ def main():
         if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
         state["last_monthly"] = dates['yesterday_iso']
 
-    daily_ranks = []
-    for name, gain in current_scrapes.items():
-        if gain != 0:
-            daily_ranks.append((name, gain))
+    daily_ranks = [(name, gain) for name, gain in current_scrapes.items() if gain != 0]
 
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
         daily_ranks.sort(key=lambda x: x[1], reverse=True)
         send_discord_post("Daily Champion", f"🗓️ Date: **{dates['yesterday_display']}**", daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers)
         state["last_daily"] = dates['yesterday_iso']
-        print(f"✅ Daily post sent for {dates['yesterday_iso']}!")
+        print(f"✅ Daily post sent!")
 
     save_json(STATE_PATH, state)
 
