@@ -21,7 +21,6 @@ MAX_XP_THRESHOLD = 200000000
 # --- 🎬 GIF CONFIGURATION ---
 KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
 BROKEN_GIF = "https://media.tenor.com/PZcZ7C1K_J0AAAAC/tibia-owned.gif"
-# New Record GIF
 PB_GIF = "https://media.tenor.com/Y36Wc8F4A_0AAAAC/record-broken-new-record.gif"
 
 # ==========================================
@@ -29,7 +28,7 @@ PB_GIF = "https://media.tenor.com/Y36Wc8F4A_0AAAAC/record-broken-new-record.gif"
 # ==========================================
 def fetch_guildstats_gain(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
-    if not bridge_url: return "NO_URL"
+    if not bridge_url: return 0
     formatted_name = "+".join([word.capitalize() for word in name.split()])
     target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
@@ -51,9 +50,6 @@ def fetch_guildstats_gain(name, dates):
         return 0
     except: return 0
 
-# ==========================================
-# ⭐ ALL-TIME PB ENGINE
-# ==========================================
 def update_personal_best(name, current_gain):
     pb_data = load_json(PB_PATH, {})
     current_gain = int(current_gain)
@@ -65,20 +61,14 @@ def update_personal_best(name, current_gain):
         return True if all_time_high > 0 else False
     return False
 
-# ==========================================
-# 🔥 THE DYNASTY ENGINE
-# ==========================================
 def update_period_streak(category, winner_name):
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
-    if "reigning_king" not in all_streaks: all_streaks["reigning_king"] = ""
-
     data = all_streaks.get(category, {})
     last_winner = data.get("last_winner", "")
     last_count = data.get("count", 0)
     reigning_king = all_streaks.get("reigning_king", "")
     
     broken_msg, crown_msg, event_gif = "", "", None
-
     if last_winner == winner_name:
         new_count = last_count + 1
     else:
@@ -105,9 +95,6 @@ def update_period_streak(category, winner_name):
     icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count >= 2 else "")
     return icon, new_count, broken_msg, crown_msg, event_gif, updated_king
 
-# ==========================================
-# 📊 VISUAL POST ENGINE
-# ==========================================
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
     filled = max(0, min(10, round((val / max_val) * 10)))
@@ -121,19 +108,14 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     curr_total = sum(item[1] for item in ranking)
     
     streak_label, broken_msg, crown_msg, final_gif, current_king = "", "", "", None, ""
-    
     if streak_cat:
         icon, count, b_msg, c_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
         broken_msg, crown_msg, final_gif, current_king = b_msg, c_msg, e_gif, king
-        
-        if icon == "👑":
-            streak_label = f" {icon}"
-        elif count >= 2:
-            streak_label = f" {icon} {count}"
+        if icon == "👑": streak_label = f" {icon}"
+        elif count >= 2: streak_label = f" {icon} {count}"
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
-    # GIF PRIORITY: Crown > Broken Streak > New PB for the winner
     if not final_gif and pb_list and ranking[0][0] in pb_list:
         final_gif = PB_GIF
 
@@ -148,72 +130,48 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         king_tag = " 👑" if (name == current_king and (i != 0 or streak_cat != "daily")) else ""
         s_label = streak_label if (i == 0 and streak_cat) else king_tag
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
-        
         fields.append({
             "name": f"{medals[i]} {name}{s_label}{pb_star}",
             "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
             "inline": False
         })
 
-    others = []
-    for name, xp in ranking[3:10]:
-        king_tag = " 👑" if name == current_king else ""
-        others.append(f"**{name}**{king_tag} (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}")
+    others = [f"**{name}**{' 👑' if name == current_king else ''} (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}" for name, xp in ranking[3:10]]
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
     embed_list = []
     if final_gif:
-        embed_list.append({
-            "title": f"🏆 {title} 🏆",
-            "description": full_desc,
-            "image": {"url": final_gif},
-            "color": color
-        })
-        embed_list.append({
-            "fields": fields,
-            "color": color,
-            "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}
-        })
+        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "image": {"url": final_gif}, "color": color})
+        embed_list.append({"fields": fields, "color": color, "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}})
     else:
-        embed_list.append({
-            "title": f"🏆 {title} 🏆",
-            "description": full_desc,
-            "fields": fields,
-            "color": color,
-            "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}
-        })
+        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "fields": fields, "color": color, "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}})
 
     requests.post(webhook, json={"embeds": embed_list})
 
-# ==========================================
-# ⚙️ HELPERS
-# ==========================================
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
     rankings = []
     if month_prefix:
         for name in chars:
             char_history = logs.get(name, {})
-            total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1)
-                        for d, v in char_history.items() if d.startswith(month_prefix))
+            total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1) for d, v in char_history.items() if d.startswith(month_prefix))
             if total != 0: rankings.append((name, total))
     else:
         today = datetime.now(ZoneInfo(TIMEZONE))
         target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, (days or 7) + 1)]
         for name in chars:
             char_history = logs.get(name, {})
-            total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1)
-                        for d in target_dates if (v := char_history.get(d)) is not None)
+            total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1) for d in target_dates if (v := char_history.get(d)) is not None)
             if total != 0: rankings.append((name, total))
     rankings.sort(key=lambda x: x[1], reverse=True)
     return rankings
 
 def load_json(path, fallback=None):
-    if not path.exists(): return fallback if fallback is not None else {}
+    if not path.exists(): return fallback or {}
     try:
         with open(path, "r") as f:
             content = f.read().strip()
-            return json.loads(content) if content else fallback
-    except: return fallback if fallback is not None else {}
+            return json.loads(content) if content else (fallback or {})
+    except: return fallback or {}
 
 def save_json(path, data):
     with open(path, "w") as f: json.dump(data, f, indent=2)
@@ -232,19 +190,36 @@ def get_dates():
 
 def main():
     dates = get_dates()
-    logs, state = load_json(LOG_PATH, {}), load_json(STATE_PATH, {})
+    logs, state = load_json(LOG_PATH), load_json(STATE_PATH)
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
     print(f"🌐 Scraping {dates['yesterday_iso']}...")
+    
+    current_scrapes = {}
     daily_pb_achievers = []
+    total_non_zero = 0
+
+    # 🛠️ PRE-SCRAPE PHASE
     for name in chars:
         gain = fetch_guildstats_gain(name, dates)
+        current_scrapes[name] = gain
+        if gain != 0:
+            total_non_zero += 1
+        time.sleep(1.5)
+
+    # 🛡️ THE ANTI-ZERO SHIELD
+    if total_non_zero == 0:
+        print(f"🛑 ANTI-ZERO TRIGGERED: Everyone is at 0 XP for {dates['yesterday_iso']}.")
+        print("This usually means GuildStats hasn't updated yet. No data will be saved.")
+        return # ABORT MISSION
+
+    # 🏆 DATA PROCESSING PHASE (Only runs if data exists)
+    for name, gain in current_scrapes.items():
         if name not in logs: logs[name] = {}
         logs[name][dates['yesterday_iso']] = f"{gain:+,}"
         if gain > 0 and update_personal_best(name, gain):
             daily_pb_achievers.append(name)
-        time.sleep(1.5)
     
     save_json(LOG_PATH, logs)
 
@@ -259,16 +234,15 @@ def main():
         state["last_monthly"] = dates['yesterday_iso']
 
     daily_ranks = []
-    for name in chars:
-        v = logs.get(name, {}).get(dates['yesterday_iso'], "0")
-        clean = "".join(c for c in str(v) if c.isdigit())
-        if clean and int(clean) != 0:
-            daily_ranks.append((name, int(clean) * (-1 if str(v).startswith('-') else 1)))
+    for name, gain in current_scrapes.items():
+        if gain != 0:
+            daily_ranks.append((name, gain))
 
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
         daily_ranks.sort(key=lambda x: x[1], reverse=True)
         send_discord_post("Daily Champion", f"🗓️ Date: **{dates['yesterday_display']}**", daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers)
         state["last_daily"] = dates['yesterday_iso']
+        print(f"✅ Daily post sent for {dates['yesterday_iso']}!")
 
     save_json(STATE_PATH, state)
 
