@@ -50,6 +50,9 @@ def fetch_guildstats_gain(name, dates):
         return 0
     except: return 0
 
+# ==========================================
+# ⭐ ALL-TIME PB ENGINE
+# ==========================================
 def update_personal_best(name, current_gain):
     pb_data = load_json(PB_PATH, {})
     current_gain = int(current_gain)
@@ -61,16 +64,20 @@ def update_personal_best(name, current_gain):
         return True
     return False
 
+# ==========================================
+# 🔥 THE STREAK ENGINE (Daily King Only)
+# ==========================================
 def update_period_streak(category, winner_name):
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
     data = all_streaks.get(category, {})
     last_winner = data.get("last_winner", "")
     last_count = data.get("count", 0)
     reigning_king = all_streaks.get("reigning_king", "")
-    
-    broken_msg, crown_msg, event_gif = "", "", None
+
+    broken_msg, king_msg, event_gif = "", "", None
+
     if last_winner != winner_name:
-        if last_count >= 2:
+        if last_count >= 2 and category == "daily":
             broken_msg = f"\n💔 **{last_winner}**'s streak of **{last_count}** was broken by **{winner_name}**!"
             if last_winner == reigning_king:
                 broken_msg += " The King has fallen..."
@@ -79,23 +86,25 @@ def update_period_streak(category, winner_name):
     else:
         new_count = last_count + 1
     
-    if category == "daily":
-        if new_count >= 5:
-            if winner_name != reigning_king:
-                crown_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne!"
-                all_streaks["reigning_king"] = winner_name
-                event_gif = KING_GIF
-            else:
-                crown_msg = f"\n👑 **THE KING EXTENDS HIS REIGN!** 👑\n**{winner_name}** is on a **{new_count} day** streak!"
-                event_gif = KING_GIF
+    if category == "daily" and new_count >= 5:
+        if winner_name != reigning_king:
+            king_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne!"
+            all_streaks["reigning_king"] = winner_name
+            event_gif = KING_GIF
+        else:
+            king_msg = f"\n👑 **THE KING EXTENDS HIS REIGN!** 👑\n**{winner_name}** is on a **{new_count} day** streak!"
+            event_gif = KING_GIF
 
     all_streaks[category] = {"last_winner": winner_name, "count": new_count}
     save_json(STREAKS_PATH, all_streaks)
     
     updated_king = all_streaks.get("reigning_king", "")
     icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count >= 2 else "")
-    return icon, new_count, broken_msg, crown_msg, event_gif, updated_king
+    return icon, new_count, broken_msg, king_msg, event_gif, updated_king
 
+# ==========================================
+# 📊 VISUAL POST ENGINE
+# ==========================================
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
     filled = max(0, min(10, round((val / max_val) * 10)))
@@ -108,21 +117,22 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     max_xp = ranking[0][1]
     curr_total = sum(item[1] for item in ranking)
     
-    streak_label, broken_msg, crown_msg, final_gif, current_king = "", "", "", None, ""
+    streak_label, broken_msg, king_msg, final_gif, current_king = "", "", "", None, ""
+    
     if streak_cat:
-        icon, count, b_msg, c_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
-        broken_msg, crown_msg, final_gif, current_king = b_msg, c_msg, e_gif, king
+        icon, count, b_msg, k_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
+        broken_msg, king_msg, final_gif, current_king = b_msg, k_msg, e_gif, king
         if icon == "👑": streak_label = f" {icon}"
         elif count >= 2: streak_label = f" {icon} {count}"
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
-    if not final_gif and pb_list and ranking[0][0] in pb_list:
+    if streak_cat == "daily" and not final_gif and pb_list and ranking[0][0] in pb_list:
         final_gif = PB_GIF
 
     full_desc = subtitle
     if broken_msg: full_desc += broken_msg
-    if crown_msg: full_desc += crown_msg
+    if king_msg: full_desc += king_msg
 
     fields = []
     medals = ["🥇", "🥈", "🥉"]
@@ -137,20 +147,23 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
             "inline": False
         })
 
-    others = [f"**{name}**{' 👑' if name == current_king else ''} (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}" for name, xp in ranking[3:10]]
+    others = [f"**{name}** (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}" for name, xp in ranking[3:10]]
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
+
+    # 🛠️ THE SEPARATE LINE FOOTER
+    footer_text = f"Team Total: {curr_total:,} XP\n⭐️=PB | 🔥=Streak | 👑=King"
 
     embed_list = []
     if final_gif:
         embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "image": {"url": final_gif}, "color": color})
-        embed_list.append({"fields": fields, "color": color, "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}})
+        embed_list.append({"fields": fields, "color": color, "footer": {"text": footer_text}})
     else:
-        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "fields": fields, "color": color, "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}})
+        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "fields": fields, "color": color, "footer": {"text": footer_text}})
 
     requests.post(webhook, json={"embeds": embed_list})
 
 # ==========================================
-# ⚙️ ROBUST HELPERS (V59 - Defends against empty literals)
+# ⚙️ HELPERS
 # ==========================================
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
     rankings = []
@@ -160,10 +173,8 @@ def get_summed_xp(logs, chars, days=None, month_prefix=None):
             total = 0
             for d, v in char_history.items():
                 if d.startswith(month_prefix):
-                    val_str = str(v)
-                    digits = "".join(c for c in val_str if c.isdigit())
-                    if digits:
-                        total += int(digits) * (-1 if val_str.startswith('-') else 1)
+                    digits = "".join(c for c in str(v) if c.isdigit())
+                    if digits: total += int(digits) * (-1 if str(v).startswith('-') else 1)
             if total != 0: rankings.append((name, total))
     else:
         today = datetime.now(ZoneInfo(TIMEZONE))
@@ -173,11 +184,9 @@ def get_summed_xp(logs, chars, days=None, month_prefix=None):
             total = 0
             for d in target_dates:
                 v = char_history.get(d)
-                if v is not None:
-                    val_str = str(v)
-                    digits = "".join(c for c in val_str if c.isdigit())
-                    if digits:
-                        total += int(digits) * (-1 if val_str.startswith('-') else 1)
+                if v:
+                    digits = "".join(c for c in str(v) if c.isdigit())
+                    if digits: total += int(digits) * (-1 if str(v).startswith('-') else 1)
             if total != 0: rankings.append((name, total))
     rankings.sort(key=lambda x: x[1], reverse=True)
     return rankings
@@ -223,7 +232,7 @@ def main():
         time.sleep(1.5)
 
     if total_non_zero == 0:
-        print(f"🛑 ANTI-ZERO TRIGGERED: Website likely hasn't updated.")
+        print(f"🛑 ANTI-ZERO TRIGGERED.")
         return 
 
     for name, gain in current_scrapes.items():
@@ -245,12 +254,10 @@ def main():
         state["last_monthly"] = dates['yesterday_iso']
 
     daily_ranks = [(name, gain) for name, gain in current_scrapes.items() if gain != 0]
-
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
         daily_ranks.sort(key=lambda x: x[1], reverse=True)
         send_discord_post("Daily Champion", f"🗓️ Date: **{dates['yesterday_display']}**", daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers)
         state["last_daily"] = dates['yesterday_iso']
-        print(f"✅ Daily post sent!")
 
     save_json(STATE_PATH, state)
 
