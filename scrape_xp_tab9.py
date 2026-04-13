@@ -18,7 +18,7 @@ PB_PATH = BASE_DIR / "personal_bests.json"
 TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
 
-# --- 🎬 GIF CONFIGURATION (Direct Media Links) ---
+# --- 🎬 GIF CONFIGURATION ---
 KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
 BROKEN_GIF = "https://media.tenor.com/PZcZ7C1K_J0AAAAC/tibia-owned.gif"
 PB_GIF = "https://media.tenor.com/Y36Wc8F4A_0AAAAC/record-broken-new-record.gif"
@@ -117,7 +117,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
-    # GIF Priority: Broken Streak/Crown > Personal Best
     if not final_gif and pb_list and ranking[0][0] in pb_list:
         final_gif = PB_GIF
 
@@ -142,44 +141,43 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
     embed_list = []
-    # 🎬 SPLIT EMBED SYSTEM: GIF appears under text but above table
     if final_gif:
-        print(f"🎬 Sending celebration GIF: {final_gif}")
-        embed_list.append({
-            "title": f"🏆 {title} 🏆",
-            "description": full_desc,
-            "image": {"url": final_gif},
-            "color": color
-        })
-        embed_list.append({
-            "fields": fields,
-            "color": color,
-            "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}
-        })
+        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "image": {"url": final_gif}, "color": color})
+        embed_list.append({"fields": fields, "color": color, "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}})
     else:
-        embed_list.append({
-            "title": f"🏆 {title} 🏆",
-            "description": full_desc,
-            "fields": fields,
-            "color": color,
-            "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}
-        })
+        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "fields": fields, "color": color, "footer": {"text": f"Team Total: {curr_total:,} XP\n⭐️ = All-Time High | 🔥 = Streak | 👑 = Reigning King"}})
 
     requests.post(webhook, json={"embeds": embed_list})
 
+# ==========================================
+# ⚙️ ROBUST HELPERS (V59 - Defends against empty literals)
+# ==========================================
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
     rankings = []
     if month_prefix:
         for name in chars:
             char_history = logs.get(name, {})
-            total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1) for d, v in char_history.items() if d.startswith(month_prefix))
+            total = 0
+            for d, v in char_history.items():
+                if d.startswith(month_prefix):
+                    val_str = str(v)
+                    digits = "".join(c for c in val_str if c.isdigit())
+                    if digits:
+                        total += int(digits) * (-1 if val_str.startswith('-') else 1)
             if total != 0: rankings.append((name, total))
     else:
         today = datetime.now(ZoneInfo(TIMEZONE))
         target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, (days or 7) + 1)]
         for name in chars:
             char_history = logs.get(name, {})
-            total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1) for d in target_dates if (v := char_history.get(d)) is not None)
+            total = 0
+            for d in target_dates:
+                v = char_history.get(d)
+                if v is not None:
+                    val_str = str(v)
+                    digits = "".join(c for c in val_str if c.isdigit())
+                    if digits:
+                        total += int(digits) * (-1 if val_str.startswith('-') else 1)
             if total != 0: rankings.append((name, total))
     rankings.sort(key=lambda x: x[1], reverse=True)
     return rankings
