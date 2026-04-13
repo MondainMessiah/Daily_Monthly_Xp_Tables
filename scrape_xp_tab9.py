@@ -103,7 +103,7 @@ def update_period_streak(category, winner_name):
     return icon, new_count, broken_msg, king_msg, event_gif, updated_king
 
 # ==========================================
-# 📊 VISUAL POST ENGINE
+# 📊 VISUAL POST ENGINE (V64 - Dynamic Footer)
 # ==========================================
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
@@ -122,8 +122,10 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     if streak_cat:
         icon, count, b_msg, k_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
         broken_msg, king_msg, final_gif, current_king = b_msg, k_msg, e_gif, king
-        if icon == "👑": streak_label = f" {icon}"
-        elif count >= 2: streak_label = f" {icon} {count}"
+        if icon == "👑":
+            streak_label = f" {icon}"
+        elif count >= 2:
+            streak_label = f" {icon} {count}"
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
@@ -150,8 +152,12 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     others = [f"**{name}** (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}" for name, xp in ranking[3:10]]
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
-    # 🛠️ THE SEPARATE LINE FOOTER
-    footer_text = f"Team Total: {curr_total:,} XP\n⭐️=PB | 🔥=Streak | 👑=King"
+    # 🛠️ DYNAMIC FOOTER LOGIC
+    legend = "⭐️=PB | 🔥=Streak"
+    if streak_cat == "daily":
+        legend += " | 👑=King"
+    
+    footer_text = f"Team Total: {curr_total:,} XP\n{legend}"
 
     embed_list = []
     if final_gif:
