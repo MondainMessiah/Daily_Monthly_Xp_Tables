@@ -24,8 +24,8 @@ LEVEL_UP_ICON = "<:levelup:1493312857272614943>"
 
 # --- 🎬 GIF CONFIGURATION ---
 KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
-BROKEN_GIF = "https://media.tenor.com/PZcZ7C1K_J0AAAAC/tibia-owned.gif"
-# PB_GIF Removed
+# Updated to a more reliable direct Tenor link
+BROKEN_GIF = "https://media1.tenor.com/m/PZcZ7C1K_J0AAAAC/tibia-owned.gif"
 
 # ==========================================
 # 🛠️ THE DATA SCRAPER
@@ -91,14 +91,19 @@ def update_period_streak(category, winner_name):
     last_winner = data.get("last_winner", "")
     last_count = data.get("count", 0)
     reigning_king = all_streaks.get("reigning_king", "")
+    
     broken_msg, king_msg, event_gif = "", "", None
+    
     if last_winner != winner_name:
         if last_count >= 2 and category == "daily":
             broken_msg = f"\n💔 **{last_winner}**'s streak of **{last_count}** was broken by **{winner_name}**!"
+            if last_winner == reigning_king:
+                broken_msg += " The King has fallen..."
             event_gif = BROKEN_GIF
         new_count = 1
     else:
         new_count = last_count + 1
+        
     if category == "daily" and new_count >= 5:
         if winner_name != reigning_king:
             king_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne!"
@@ -107,8 +112,10 @@ def update_period_streak(category, winner_name):
         else:
             king_msg = f"\n👑 **THE KING EXTENDS HIS REIGN!** 👑\n**{winner_name}** is on a **{new_count} day** streak!"
             event_gif = KING_GIF
+            
     all_streaks[category] = {"last_winner": winner_name, "count": new_count}
     save_json(STREAKS_PATH, all_streaks)
+    
     updated_king = all_streaks.get("reigning_king", "")
     icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count >= 2 else "")
     return icon, new_count, broken_msg, king_msg, event_gif, updated_king
@@ -161,13 +168,19 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
 
     footer_text = f"Team Total: {curr_total:,} XP\n⭐️=PB | 🔥=Streak" + (" | 👑=King" if streak_cat == "daily" else "")
 
-    embed_list = []
+    # Unified Embed Logic: Image is now INSIDE the main embed for maximum reliability
+    main_embed = {
+        "title": f"🏆 {title} 🏆",
+        "description": full_desc,
+        "fields": fields,
+        "color": color,
+        "footer": {"text": footer_text}
+    }
+    
     if final_gif:
-        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "image": {"url": final_gif}, "color": color})
-        embed_list.append({"fields": fields, "color": color, "footer": {"text": footer_text}})
-    else:
-        embed_list.append({"title": f"🏆 {title} 🏆", "description": full_desc, "fields": fields, "color": color, "footer": {"text": footer_text}})
-    requests.post(webhook, json={"embeds": embed_list})
+        main_embed["image"] = {"url": final_gif}
+
+    requests.post(webhook, json={"embeds": [main_embed]})
 
 # ==========================================
 # ⚙️ HELPERS & MAIN
