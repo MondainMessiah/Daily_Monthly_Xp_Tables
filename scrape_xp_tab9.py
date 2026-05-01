@@ -24,8 +24,7 @@ LEVEL_UP_ICON = "<:levelup:1493312857272614943>"
 
 # --- 🎬 GIF CONFIGURATION ---
 KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
-# Updated to a more reliable direct Tenor link
-BROKEN_GIF = "https://media1.tenor.com/m/PZcZ7C1K_J0AAAAC/tibia-owned.gif"
+# PB_GIF and BROKEN_GIF removed per user request
 
 # ==========================================
 # 🛠️ THE DATA SCRAPER
@@ -99,7 +98,6 @@ def update_period_streak(category, winner_name):
             broken_msg = f"\n💔 **{last_winner}**'s streak of **{last_count}** was broken by **{winner_name}**!"
             if last_winner == reigning_king:
                 broken_msg += " The King has fallen..."
-            event_gif = BROKEN_GIF
         new_count = 1
     else:
         new_count = last_count + 1
@@ -168,7 +166,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
 
     footer_text = f"Team Total: {curr_total:,} XP\n⭐️=PB | 🔥=Streak" + (" | 👑=King" if streak_cat == "daily" else "")
 
-    # Unified Embed Logic: Image is now INSIDE the main embed for maximum reliability
     main_embed = {
         "title": f"🏆 {title} 🏆",
         "description": full_desc,
@@ -188,18 +185,37 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
     rankings = []
     today = datetime.now(ZoneInfo(TIMEZONE))
+    
+    # Calculate target dates for weekly
     target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, (days or 7) + 1)] if not month_prefix else []
+    
     for name in chars:
         char_history = logs.get(name, {})
         total = 0
+        
         if month_prefix:
-            total = sum(int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1) for d, v in char_history.items() if d.startswith(month_prefix))
+            for d, v in char_history.items():
+                if d.startswith(month_prefix):
+                    # Fixed crash here: Safely extract digits
+                    val_str = str(v)
+                    digits = "".join(c for c in val_str if c.isdigit())
+                    if digits:
+                        total += int(digits) * (-1 if val_str.startswith('-') else 1)
         else:
             for d in target_dates:
                 v = char_history.get(d)
-                if v: total += int("".join(c for c in str(v) if c.isdigit())) * (-1 if str(v).startswith('-') else 1)
-        if total != 0: rankings.append((name, total))
-    rankings.sort(key=lambda x: x[1], reverse=True); return rankings
+                if v:
+                    # Fixed crash here: Safely extract digits
+                    val_str = str(v)
+                    digits = "".join(c for c in val_str if c.isdigit())
+                    if digits:
+                        total += int(digits) * (-1 if val_str.startswith('-') else 1)
+        
+        if total != 0:
+            rankings.append((name, total))
+            
+    rankings.sort(key=lambda x: x[1], reverse=True)
+    return rankings
 
 def load_json(path, fallback=None):
     if not path.exists(): return fallback or {}
