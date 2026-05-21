@@ -23,13 +23,13 @@ MAX_XP_THRESHOLD = 200000000
 # --- 🎨 EMOJI CONFIGURATION ---
 LEVEL_UP_ICON = "<:levelup:1493312857272614943>" 
 
-# --- 🎬 GIF CONFIGURATION (GAME OF THRONES ROYAL POOL) ---
+# --- 🎬 GIF CONFIGURATION (VERIFIED GOT KING POOL) ---
 KING_GIFS = [
-    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdnA0bGd6b3B4YnR6ZW1wM280eHlwYm80Z3hxNXZ0bnB5bTh3Z3E1MCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/vX79ZAsCNe6n6/giphy.gif",  # Robert Baratheon
-    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3RjcmxlcjV0YndmNzhwbWZpeWZpa3U1bTR0dzY2cTVpYnd4bnM4dSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/p6jVTOTCo63cs/giphy.gif",  # Joffrey Baratheon
-    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExMnNjcTRoOWtxaHJwbWZpM3NreWZpa3U1bTR0dzY2cTVpYnd4bnM4dSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/8v3EErE79ZOpq/giphy.gif",      # Robb Stark
-    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNXptYWx4cXZmdmRwODhrZDRhM3Q5dHkyNTVuMDJkbGtzYTFjdHBwNiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7qE1YN7aBOFPRw8E/giphy.gif",  # Jon Snow
-    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3Z0cmh6N3R5M3N0MXNibXp5NjN5dW96eGd0b3M0b3E4bW5wZndpdyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l41YedIBvT817KOF2/giphy.gif"   # Tommen Baratheon
+    "https://i.giphy.com/media/vX79ZAsCNe6n6/giphy.gif",      # Robert Baratheon
+    "https://i.giphy.com/media/p6jVTOTCo63cs/giphy.gif",      # Joffrey Baratheon
+    "https://i.giphy.com/media/8v3EErE79ZOpq/giphy.gif",      # Robb Stark
+    "https://i.giphy.com/media/26vUJAbhM8kHhA8X6/giphy.gif",   # Jon Snow
+    "https://i.giphy.com/media/l41YedIBvT817KOF2/giphy.gif"    # Tommen Baratheon
 ]
 
 # ==========================================
@@ -171,7 +171,11 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         others.append(f"**{name}** (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}{lvl_icon}")
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
-    footer_text = f"Team Total: {curr_total:,} XP\n⭐️=PB | 🔥=Streak" + (" | 👑=King" if streak_cat == "daily" else "")
+    # Two-tier dynamic footer configuration
+    legend = "⭐️=PB | 🔥=Streak"
+    if streak_cat == "daily":
+        legend += " | 👑=King"
+    footer_text = f"Team Total: {curr_total:,} XP\n{legend}"
 
     main_embed = {
         "title": f"🏆 {title} 🏆",
@@ -187,7 +191,7 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     requests.post(webhook, json={"embeds": [main_embed]})
 
 # ==========================================
-# ⚙️ HELPERS & MAIN
+# ⚙️ HELPERS & MAIN ENGINE
 # ==========================================
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
     rankings = []
@@ -202,7 +206,7 @@ def get_summed_xp(logs, chars, days=None, month_prefix=None):
             for d, v in char_history.items():
                 if d.startswith(month_prefix):
                     val_str = str(v)
-                    # Safe digit extraction to prevent '' ValueError crash
+                    # Bulletproof parsing engine fix to prevent literal for int() crash
                     digits = "".join(c for c in val_str if c.isdigit())
                     if digits:
                         total += int(digits) * (-1 if val_str.startswith('-') else 1)
