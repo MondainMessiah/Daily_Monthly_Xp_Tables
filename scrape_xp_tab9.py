@@ -4,6 +4,7 @@ import requests
 import re
 import urllib.parse
 import time
+import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -22,9 +23,14 @@ MAX_XP_THRESHOLD = 200000000
 # --- 🎨 EMOJI CONFIGURATION ---
 LEVEL_UP_ICON = "<:levelup:1493312857272614943>" 
 
-# --- 🎬 GIF CONFIGURATION ---
-KING_GIF = "https://media.giphy.com/media/Sgx2d1QnSBnNEDnE96/giphy.gif"
-# PB_GIF and BROKEN_GIF removed per user request
+# --- 🎬 GIF CONFIGURATION (GAME OF THRONES ROYAL POOL) ---
+KING_GIFS = [
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExdnA0bGd6b3B4YnR6ZW1wM280eHlwYm80Z3hxNXZ0bnB5bTh3Z3E1MCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/vX79ZAsCNe6n6/giphy.gif",  # Robert Baratheon
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3RjcmxlcjV0YndmNzhwbWZpeWZpa3U1bTR0dzY2cTVpYnd4bnM4dSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/p6jVTOTCo63cs/giphy.gif",  # Joffrey Baratheon
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExMnNjcTRoOWtxaHJwbWZpM3NreWZpa3U1bTR0dzY2cTVpYnd4bnM4dSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/8v3EErE79ZOpq/giphy.gif",      # Robb Stark
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNXptYWx4cXZmdmRwODhrZDRhM3Q5dHkyNTVuMDJkbGtzYTFjdHBwNiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7qE1YN7aBOFPRw8E/giphy.gif",  # Jon Snow
+    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3Z0cmh6N3R5M3N0MXNibXp5NjN5dW96eGd0b3M0b3E4bW5wZndpdyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l41YedIBvT817KOF2/giphy.gif"   # Tommen Baratheon
+]
 
 # ==========================================
 # 🛠️ THE DATA SCRAPER
@@ -103,13 +109,14 @@ def update_period_streak(category, winner_name):
         new_count = last_count + 1
         
     if category == "daily" and new_count >= 5:
+        selected_gif = random.choice(KING_GIFS)
         if winner_name != reigning_king:
             king_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne!"
             all_streaks["reigning_king"] = winner_name
-            event_gif = KING_GIF
+            event_gif = selected_gif
         else:
             king_msg = f"\n👑 **THE KING EXTENDS HIS REIGN!** 👑\n**{winner_name}** is on a **{new_count} day** streak!"
-            event_gif = KING_GIF
+            event_gif = selected_gif
             
     all_streaks[category] = {"last_winner": winner_name, "count": new_count}
     save_json(STREAKS_PATH, all_streaks)
@@ -185,8 +192,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
     rankings = []
     today = datetime.now(ZoneInfo(TIMEZONE))
-    
-    # Calculate target dates for weekly
     target_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, (days or 7) + 1)] if not month_prefix else []
     
     for name in chars:
@@ -196,8 +201,8 @@ def get_summed_xp(logs, chars, days=None, month_prefix=None):
         if month_prefix:
             for d, v in char_history.items():
                 if d.startswith(month_prefix):
-                    # Fixed crash here: Safely extract digits
                     val_str = str(v)
+                    # Safe digit extraction to prevent '' ValueError crash
                     digits = "".join(c for c in val_str if c.isdigit())
                     if digits:
                         total += int(digits) * (-1 if val_str.startswith('-') else 1)
@@ -205,7 +210,6 @@ def get_summed_xp(logs, chars, days=None, month_prefix=None):
             for d in target_dates:
                 v = char_history.get(d)
                 if v:
-                    # Fixed crash here: Safely extract digits
                     val_str = str(v)
                     digits = "".join(c for c in val_str if c.isdigit())
                     if digits:
