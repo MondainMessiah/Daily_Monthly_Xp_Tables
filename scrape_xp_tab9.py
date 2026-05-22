@@ -23,13 +23,13 @@ MAX_XP_THRESHOLD = 200000000
 # --- 🎨 EMOJI CONFIGURATION ---
 LEVEL_UP_ICON = "<:levelup:1493312857272614943>" 
 
-# --- 🎬 GIF CONFIGURATION (VERIFIED GOT KING POOL) ---
+# --- 🎬 GIF CONFIGURATION (CLEANED DIRECT RAW LINKS) ---
 KING_GIFS = [
-    "https://i.giphy.com/media/vX79ZAsCNe6n6/giphy.gif",      # Robert Baratheon
-    "https://i.giphy.com/media/p6jVTOTCo63cs/giphy.gif",      # Joffrey Baratheon
-    "https://i.giphy.com/media/8v3EErE79ZOpq/giphy.gif",      # Robb Stark
-    "https://i.giphy.com/media/26vUJAbhM8kHhA8X6/giphy.gif",   # Jon Snow
-    "https://i.giphy.com/media/l41YedIBvT817KOF2/giphy.gif"    # Tommen Baratheon
+    "https://i.giphy.com/vX79ZAsCNe6n6.gif",      # Robert Baratheon
+    "https://i.giphy.com/p6jVTOTCo63cs.gif",      # Joffrey Baratheon
+    "https://i.giphy.com/8v3EErE79ZOpq.gif",      # Robb Stark
+    "https://i.giphy.com/26vUJAbhM8kHhA8X6.gif",   # Jon Snow
+    "https://i.giphy.com/l41YedIBvT817KOF2.gif"    # Tommen Baratheon
 ]
 
 # ==========================================
@@ -171,7 +171,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         others.append(f"**{name}** (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}{lvl_icon}")
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
-    # Two-tier dynamic footer configuration
     legend = "⭐️=PB | 🔥=Streak"
     if streak_cat == "daily":
         legend += " | 👑=King"
@@ -206,7 +205,6 @@ def get_summed_xp(logs, chars, days=None, month_prefix=None):
             for d, v in char_history.items():
                 if d.startswith(month_prefix):
                     val_str = str(v)
-                    # Bulletproof parsing engine fix to prevent literal for int() crash
                     digits = "".join(c for c in val_str if c.isdigit())
                     if digits:
                         total += int(digits) * (-1 if val_str.startswith('-') else 1)
