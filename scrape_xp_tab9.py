@@ -16,12 +16,8 @@ LOG_PATH = BASE_DIR / "xp_log.json"
 STATE_PATH = BASE_DIR / "post_state.json"
 STREAKS_PATH = BASE_DIR / "streaks.json"
 PB_PATH = BASE_DIR / "personal_bests.json"
-LEVELS_PATH = BASE_DIR / "levels.json" 
 TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
-
-# --- 🎨 EMOJI CONFIGURATION ---
-LEVEL_UP_ICON = "<:levelup:1493312857272614943>" 
 
 # --- 🎬 GIF CONFIGURATION (VERIFIED GOT KING POOL) ---
 KING_GIFS = [
@@ -37,13 +33,13 @@ KING_GIFS = [
 # ==========================================
 def fetch_data(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
-    if not bridge_url: return 0, 0
+    if not bridge_url: return 0
     formatted_name = "+".join([word.capitalize() for word in name.split()])
     target_url = f"https://guildstats.eu/include/character/tab.php?nick={formatted_name}&tab=experience"
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
     try:
         r = requests.get(final_url, timeout=45)
-        if r.status_code != 200: return 0, 0
+        if r.status_code != 200: return 0
         
         # Pull XP
         xp_gain = 0
@@ -58,23 +54,8 @@ def fetch_data(name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
-        
-        # Pull Level
-        level = 0
-        lvl_match = re.search(r"Level: <b>(\d+)</b>", r.text)
-        if lvl_match:
-            level = int(lvl_match.group(1))
-            
-        return xp_gain, level
-    except: return 0, 0
-
-def check_level_up(name, current_level):
-    levels = load_json(LEVELS_PATH, {})
-    old_level = levels.get(name, 0)
-    levels[name] = current_level
-    save_json(LEVELS_PATH, levels)
-    if old_level == 0: return False
-    return current_level > old_level
+        return xp_gain
+    except: return 0
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
@@ -130,10 +111,9 @@ def make_bar(val, max_val):
     filled = max(0, min(10, round((val / max_val) * 10)))
     return "🟩" * filled + "⬛" * (10 - filled)
 
-def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, pb_list=None, level_ups=None):
+def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, pb_list=None):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook or not ranking: return
-    level_ups = level_ups or []
     pb_list = pb_list or []
     max_xp = ranking[0][1]
     curr_total = sum(item[1] for item in ranking)
@@ -155,20 +135,18 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     medals = ["🥇", "🥈", "🥉"]
     for i, (name, xp) in enumerate(ranking[:3]):
         pb_star = " ⭐️" if name in pb_list else ""
-        lvl_icon = f" {LEVEL_UP_ICON}" if name in level_ups else ""
         king_tag = " 👑" if (name == current_king and (i != 0 or streak_cat != "daily")) else ""
         s_label = streak_label if (i == 0 and streak_cat) else king_tag
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         fields.append({
-            "name": f"{medals[i]} {name}{s_label}{pb_star}{lvl_icon}",
+            "name": f"{medals[i]} {name}{s_label}{pb_star}",
             "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
             "inline": False
         })
 
     others = []
     for name, xp in ranking[3:10]:
-        lvl_icon = f" {LEVEL_UP_ICON}" if name in level_ups else ""
-        others.append(f"**{name}** (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}{lvl_icon}")
+        others.append(f"**{name}** (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}")
     if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
 
     legend = "⭐️=PB | 🔥=Streak"
@@ -243,14 +221,12 @@ def main():
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
     print(f"🌐 Scraping {dates['yesterday_iso']}...")
-    current_scrapes = {}; daily_pb_achievers = []; daily_level_ups = []; total_non_zero = 0
+    current_scrapes = {}; daily_pb_achievers = []; total_non_zero = 0
 
     for name in chars:
-        gain, level = fetch_data(name, dates)
+        gain = fetch_data(name, dates)
         current_scrapes[name] = gain
         if gain != 0: total_non_zero += 1
-        if level > 0 and check_level_up(name, level):
-            daily_level_ups.append(name)
         time.sleep(1.5)
 
     if total_non_zero == 0:
@@ -272,7 +248,6 @@ def main():
         loss_xp = current_scrapes[reigning_king]
         king_died_msg = f"\n\n💀 **THE KING HAS DIED IN BATTLE!** 💀\n**{reigning_king}** lost `{loss_xp:+,} XP` and has been stripped of the crown! The throne is vacant!"
         all_streaks["reigning_king"] = ""
-        # Reset their daily consecutive streak count entirely
         if all_streaks.get("daily", {}).get("last_winner") == reigning_king:
             all_streaks["daily"] = {"last_winner": "", "count": 0}
         save_json(STREAKS_PATH, all_streaks)
@@ -291,12 +266,11 @@ def main():
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
         daily_ranks.sort(key=lambda x: x[1], reverse=True)
         
-        # Append the tragedy to the subtitle if the King bit the dust
         sub_text = f"🗓️ Date: **{dates['yesterday_display']}**"
         if king_died_msg:
             sub_text += king_died_msg
             
-        send_discord_post("Daily Champion", sub_text, daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers, level_ups=daily_level_ups)
+        send_discord_post("Daily Champion", sub_text, daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers)
         state["last_daily"] = dates['yesterday_iso']
 
     save_json(STATE_PATH, state)
