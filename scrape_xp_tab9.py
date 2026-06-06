@@ -23,7 +23,7 @@ MAX_XP_THRESHOLD = 200000000
 # --- 🎨 EMOJI CONFIGURATION ---
 LEVEL_UP_ICON = "<:levelup:1493312857272614943>" 
 
-# --- 🎬 GIF CONFIGURATION (CLEANED DIRECT RAW LINKS) ---
+# --- 🎬 GIF CONFIGURATION (VERIFIED GOT KING POOL) ---
 KING_GIFS = [
     "https://i.giphy.com/vX79ZAsCNe6n6.gif",      # Robert Baratheon
     "https://i.giphy.com/p6jVTOTCo63cs.gif",      # Joffrey Baratheon
@@ -263,6 +263,20 @@ def main():
     
     save_json(LOG_PATH, logs)
 
+    # ⚔️ KING DEATH ENGINE: Strip crown if King drops daily XP ⚔️
+    all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
+    reigning_king = all_streaks.get("reigning_king", "")
+    king_died_msg = ""
+    
+    if reigning_king and current_scrapes.get(reigning_king, 0) < 0:
+        loss_xp = current_scrapes[reigning_king]
+        king_died_msg = f"\n\n💀 **THE KING HAS DIED IN BATTLE!** 💀\n**{reigning_king}** lost `{loss_xp:+,} XP` and has been stripped of the crown! The throne is vacant!"
+        all_streaks["reigning_king"] = ""
+        # Reset their daily consecutive streak count entirely
+        if all_streaks.get("daily", {}).get("last_winner") == reigning_king:
+            all_streaks["daily"] = {"last_winner": "", "count": 0}
+        save_json(STREAKS_PATH, all_streaks)
+
     if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
         r = get_summed_xp(logs, chars, days=7)
         if r: send_discord_post("Weekly XP Totals", "🗓️ Period: **Last 7 Days**", r, 0x3498db, dates, "weekly")
@@ -276,7 +290,13 @@ def main():
     daily_ranks = [(name, gain) for name, gain in current_scrapes.items() if gain != 0]
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
         daily_ranks.sort(key=lambda x: x[1], reverse=True)
-        send_discord_post("Daily Champion", f"🗓️ Date: **{dates['yesterday_display']}**", daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers, level_ups=daily_level_ups)
+        
+        # Append the tragedy to the subtitle if the King bit the dust
+        sub_text = f"🗓️ Date: **{dates['yesterday_display']}**"
+        if king_died_msg:
+            sub_text += king_died_msg
+            
+        send_discord_post("Daily Champion", sub_text, daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers, level_ups=daily_level_ups)
         state["last_daily"] = dates['yesterday_iso']
 
     save_json(STATE_PATH, state)
