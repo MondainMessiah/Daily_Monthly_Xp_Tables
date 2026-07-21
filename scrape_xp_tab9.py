@@ -89,7 +89,8 @@ def update_period_streak(category, winner_name):
     else:
         new_count = last_count + 1
         
-    if category == "daily" and new_count >= 5:
+    # RULE CHANGE: Changed streak threshold from >= 5 to >= 3
+    if category == "daily" and new_count >= 3:
         selected_gif = random.choice(KING_GIFS)
         if winner_name != reigning_king:
             king_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne!"
@@ -239,14 +240,19 @@ def main():
     
     save_json(LOG_PATH, logs)
 
-    # ⚔️ KING DEATH ENGINE: Strip crown if King drops daily XP ⚔️
+    # ⚔️ KING DETHRONEMENT ENGINE ⚔️
+    # RULE CHANGE: Crown lost on negative XP (death) OR exactly 0 XP (no gain)
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
     reigning_king = all_streaks.get("reigning_king", "")
     king_died_msg = ""
     
-    if reigning_king and current_scrapes.get(reigning_king, 0) < 0:
-        loss_xp = current_scrapes[reigning_king]
-        king_died_msg = f"\n\n💀 **THE KING HAS DIED IN BATTLE!** 💀\n**{reigning_king}** lost `{loss_xp:+,} XP` and has been stripped of the crown! The throne is vacant!"
+    if reigning_king and current_scrapes.get(reigning_king, 0) <= 0:
+        king_xp = current_scrapes.get(reigning_king, 0)
+        if king_xp < 0:
+            king_died_msg = f"\n\n💀 **THE KING HAS DIED IN BATTLE!** 💀\n**{reigning_king}** lost `{king_xp:+,} XP` and has been stripped of the crown! The throne is vacant!"
+        else:
+            king_died_msg = f"\n\n👑❌ **THE KING WAS INACTIVE!** 👑❌\n**{reigning_king}** gained `0 XP` and has forfeited the crown! The throne is vacant!"
+            
         all_streaks["reigning_king"] = ""
         if all_streaks.get("daily", {}).get("last_winner") == reigning_king:
             all_streaks["daily"] = {"last_winner": "", "count": 0}
