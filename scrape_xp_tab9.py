@@ -89,7 +89,7 @@ def update_period_streak(category, winner_name):
     else:
         new_count = last_count + 1
         
-    # RULE CHANGE: Changed streak threshold from >= 5 to >= 3
+    # RULE: 3-day streak threshold to claim/extend King status
     if category == "daily" and new_count >= 3:
         selected_gif = random.choice(KING_GIFS)
         if winner_name != reigning_king:
@@ -123,8 +123,10 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     if streak_cat:
         icon, count, b_msg, k_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
         broken_msg, king_msg, final_gif, current_king = b_msg, k_msg, e_gif, king
-        if icon == "👑": streak_label = f" {icon}"
-        elif count >= 2: streak_label = f" {icon} {count}"
+        if icon == "👑": 
+            streak_label = f" {icon}"
+        elif count >= 2: 
+            streak_label = f" 🔥 {count}"  # Guaranteed 🔥 display for 2-day streaks
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
@@ -240,8 +242,7 @@ def main():
     
     save_json(LOG_PATH, logs)
 
-    # ⚔️ KING DETHRONEMENT ENGINE ⚔️
-    # RULE CHANGE: Crown lost on negative XP (death) OR exactly 0 XP (no gain)
+    # ⚔️ KING DETHRONEMENT ENGINE (Triggered on <= 0 XP) ⚔️
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
     reigning_king = all_streaks.get("reigning_king", "")
     king_died_msg = ""
