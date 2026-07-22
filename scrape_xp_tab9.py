@@ -89,7 +89,7 @@ def update_period_streak(category, winner_name):
     else:
         new_count = last_count + 1
         
-    # RULE: 3-day streak threshold to claim/extend King status
+    # RULE CHANGE: Changed streak threshold from >= 5 to >= 3
     if category == "daily" and new_count >= 3:
         selected_gif = random.choice(KING_GIFS)
         if winner_name != reigning_king:
@@ -105,7 +105,7 @@ def update_period_streak(category, winner_name):
     
     updated_king = all_streaks.get("reigning_king", "")
     icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count >= 2 else "")
-    return icon, new_count, broken_msg, king_msg, event_gif, updated_king, winner_name
+    return icon, new_count, broken_msg, king_msg, event_gif, updated_king
 
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
@@ -119,14 +119,12 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     max_xp = ranking[0][1]
     curr_total = sum(item[1] for item in ranking)
     
-    streak_label, broken_msg, king_msg, final_gif, current_king, streak_holder, streak_count = "", "", "", None, "", "", 0
+    streak_label, broken_msg, king_msg, final_gif, current_king = "", "", "", None, ""
     if streak_cat:
-        icon, count, b_msg, k_msg, e_gif, king, holder = update_period_streak(streak_cat, ranking[0][0])
-        broken_msg, king_msg, final_gif, current_king, streak_holder, streak_count = b_msg, k_msg, e_gif, king, holder, count
-        if icon == "👑": 
-            streak_label = f" {icon}"
-        elif count >= 2: 
-            streak_label = f" 🔥 {count}"
+        icon, count, b_msg, k_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
+        broken_msg, king_msg, final_gif, current_king = b_msg, k_msg, e_gif, king
+        if icon == "👑": streak_label = f" {icon}"
+        elif count >= 2: streak_label = f" {icon} {count}"
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
@@ -138,18 +136,11 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     medals = ["🥇", "🥈", "🥉"]
     for i, (name, xp) in enumerate(ranking[:3]):
         pb_star = " ⭐️" if name in pb_list else ""
-        king_tag = " 👑" if name == current_king else ""
-        
-        # FIX: Check if THIS specific person holds the active streak label
-        person_streak = ""
-        if streak_cat and name == streak_holder and streak_label:
-            person_streak = streak_label
-        elif king_tag:
-            person_streak = king_tag
-
+        king_tag = " 👑" if (name == current_king and (i != 0 or streak_cat != "daily")) else ""
+        s_label = streak_label if (i == 0 and streak_cat) else king_tag
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         fields.append({
-            "name": f"{medals[i]} {name}{person_streak}{pb_star}",
+            "name": f"{medals[i]} {name}{s_label}{pb_star}",
             "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
             "inline": False
         })
@@ -249,7 +240,8 @@ def main():
     
     save_json(LOG_PATH, logs)
 
-    # ⚔️ KING DETHRONEMENT ENGINE (Triggered on <= 0 XP) ⚔️
+    # ⚔️ KING DETHRONEMENT ENGINE ⚔️
+    # RULE CHANGE: Crown lost on negative XP (death) OR exactly 0 XP (no gain)
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
     reigning_king = all_streaks.get("reigning_king", "")
     king_died_msg = ""
