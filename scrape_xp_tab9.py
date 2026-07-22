@@ -80,19 +80,20 @@ def update_period_streak(category, winner_name):
     
     broken_msg, king_msg, event_gif = "", "", None
     
-    if last_winner != winner_name:
+    # Case-insensitive name comparison
+    if last_winner.strip().lower() != winner_name.strip().lower():
         if last_count >= 2 and category == "daily":
             broken_msg = f"\n💔 **{last_winner}**'s streak of **{last_count}** was broken by **{winner_name}**!"
-            if last_winner == reigning_king:
+            if last_winner.strip().lower() == reigning_king.strip().lower():
                 broken_msg += " The King has fallen..."
         new_count = 1
     else:
         new_count = last_count + 1
         
-    # RULE CHANGE: Changed streak threshold from >= 5 to >= 3
+    # RULE: 3-day streak threshold to claim/extend King status
     if category == "daily" and new_count >= 3:
         selected_gif = random.choice(KING_GIFS)
-        if winner_name != reigning_king:
+        if winner_name.strip().lower() != reigning_king.strip().lower():
             king_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne!"
             all_streaks["reigning_king"] = winner_name
             event_gif = selected_gif
@@ -104,8 +105,9 @@ def update_period_streak(category, winner_name):
     save_json(STREAKS_PATH, all_streaks)
     
     updated_king = all_streaks.get("reigning_king", "")
-    icon = "👑" if (category == "daily" and winner_name == updated_king) else ("🔥" if new_count >= 2 else "")
-    return icon, new_count, broken_msg, king_msg, event_gif, updated_king
+    is_king = winner_name.strip().lower() == updated_king.strip().lower()
+    icon = "👑" if (category == "daily" and is_king) else ("🔥" if new_count >= 2 else "")
+    return icon, new_count, broken_msg, king_msg, event_gif, updated_king, winner_name
 
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
@@ -119,12 +121,14 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     max_xp = ranking[0][1]
     curr_total = sum(item[1] for item in ranking)
     
-    streak_label, broken_msg, king_msg, final_gif, current_king = "", "", "", None, ""
+    streak_label, broken_msg, king_msg, final_gif, current_king, streak_holder, streak_count = "", "", "", None, "", "", 0
     if streak_cat:
-        icon, count, b_msg, k_msg, e_gif, king = update_period_streak(streak_cat, ranking[0][0])
-        broken_msg, king_msg, final_gif, current_king = b_msg, k_msg, e_gif, king
-        if icon == "👑": streak_label = f" {icon}"
-        elif count >= 2: streak_label = f" {icon} {count}"
+        icon, count, b_msg, k_msg, e_gif, king, holder = update_period_streak(streak_cat, ranking[0][0])
+        broken_msg, king_msg, final_gif, current_king, streak_holder, streak_count = b_msg, k_msg, e_gif, king, holder, count
+        if icon == "👑": 
+            streak_label = f" {icon}"
+        elif count >= 2: 
+            streak_label = f" 🔥 {count}"
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
@@ -136,11 +140,17 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     medals = ["🥇", "🥈", "🥉"]
     for i, (name, xp) in enumerate(ranking[:3]):
         pb_star = " ⭐️" if name in pb_list else ""
-        king_tag = " 👑" if (name == current_king and (i != 0 or streak_cat != "daily")) else ""
-        s_label = streak_label if (i == 0 and streak_cat) else king_tag
+        king_tag = " 👑" if name.strip().lower() == current_king.strip().lower() else ""
+        
+        person_streak = ""
+        if streak_cat and name.strip().lower() == streak_holder.strip().lower() and streak_label:
+            person_streak = streak_label
+        elif king_tag:
+            person_streak = king_tag
+
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         fields.append({
-            "name": f"{medals[i]} {name}{s_label}{pb_star}",
+            "name": f"{medals[i]} {name}{person_streak}{pb_star}",
             "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
             "inline": False
         })
@@ -240,23 +250,29 @@ def main():
     
     save_json(LOG_PATH, logs)
 
-    # ⚔️ KING DETHRONEMENT ENGINE ⚔️
-    # RULE CHANGE: Crown lost on negative XP (death) OR exactly 0 XP (no gain)
+    # ⚔️ KING DETHRONEMENT ENGINE (Triggered on <= 0 XP) ⚔️
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
     reigning_king = all_streaks.get("reigning_king", "")
     king_died_msg = ""
     
-    if reigning_king and current_scrapes.get(reigning_king, 0) <= 0:
-        king_xp = current_scrapes.get(reigning_king, 0)
-        if king_xp < 0:
-            king_died_msg = f"\n\n💀 **THE KING HAS DIED IN BATTLE!** 💀\n**{reigning_king}** lost `{king_xp:+,} XP` and has been stripped of the crown! The throne is vacant!"
-        else:
-            king_died_msg = f"\n\n👑❌ **THE KING WAS INACTIVE!** 👑❌\n**{reigning_king}** gained `0 XP` and has forfeited the crown! The throne is vacant!"
-            
-        all_streaks["reigning_king"] = ""
-        if all_streaks.get("daily", {}).get("last_winner") == reigning_king:
-            all_streaks["daily"] = {"last_winner": "", "count": 0}
-        save_json(STREAKS_PATH, all_streaks)
+    if reigning_king:
+        # Check current scrapes for King (case-insensitive)
+        king_xp = 0
+        for char_name, xp in current_scrapes.items():
+            if char_name.strip().lower() == reigning_king.strip().lower():
+                king_xp = xp
+                break
+
+        if king_xp <= 0:
+            if king_xp < 0:
+                king_died_msg = f"\n\n💀 **THE KING HAS DIED IN BATTLE!** 💀\n**{reigning_king}** lost `{king_xp:+,} XP` and has been stripped of the crown! The throne is vacant!"
+            else:
+                king_died_msg = f"\n\n👑❌ **THE KING WAS INACTIVE!** 👑❌\n**{reigning_king}** gained `0 XP` and has forfeited the crown! The throne is vacant!"
+                
+            all_streaks["reigning_king"] = ""
+            if all_streaks.get("daily", {}).get("last_winner", "").strip().lower() == reigning_king.strip().lower():
+                all_streaks["daily"] = {"last_winner": "", "count": 0}
+            save_json(STREAKS_PATH, all_streaks)
 
     if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
         r = get_summed_xp(logs, chars, days=7)
