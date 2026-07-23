@@ -105,9 +105,7 @@ def update_period_streak(category, winner_name):
     save_json(STREAKS_PATH, all_streaks)
     
     updated_king = all_streaks.get("reigning_king", "")
-    is_king = winner_name.strip().lower() == updated_king.strip().lower()
-    icon = "👑" if (category == "daily" and is_king) else ("🔥" if new_count >= 2 else "")
-    return icon, new_count, broken_msg, king_msg, event_gif, updated_king, winner_name
+    return new_count, broken_msg, king_msg, event_gif, updated_king, winner_name
 
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
@@ -121,14 +119,10 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     max_xp = ranking[0][1]
     curr_total = sum(item[1] for item in ranking)
     
-    streak_label, broken_msg, king_msg, final_gif, current_king, streak_holder, streak_count = "", "", "", None, "", "", 0
+    broken_msg, king_msg, final_gif, current_king, streak_holder, streak_count = "", "", None, "", "", 0
     if streak_cat:
-        icon, count, b_msg, k_msg, e_gif, king, holder = update_period_streak(streak_cat, ranking[0][0])
+        count, b_msg, k_msg, e_gif, king, holder = update_period_streak(streak_cat, ranking[0][0])
         broken_msg, king_msg, final_gif, current_king, streak_holder, streak_count = b_msg, k_msg, e_gif, king, holder, count
-        if icon == "👑": 
-            streak_label = f" {icon}"
-        elif count >= 2: 
-            streak_label = f" 🔥 {count}"
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
@@ -140,17 +134,18 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     medals = ["🥇", "🥈", "🥉"]
     for i, (name, xp) in enumerate(ranking[:3]):
         pb_star = " ⭐️" if name in pb_list else ""
-        king_tag = " 👑" if name.strip().lower() == current_king.strip().lower() else ""
         
-        person_streak = ""
-        if streak_cat and name.strip().lower() == streak_holder.strip().lower() and streak_label:
-            person_streak = streak_label
-        elif king_tag:
-            person_streak = king_tag
+        # Build stacked status tags
+        person_tags = ""
+        if name.strip().lower() == current_king.strip().lower():
+            person_tags += " 👑"
+            
+        if streak_cat and name.strip().lower() == streak_holder.strip().lower() and streak_count >= 2:
+            person_tags += f" 🔥 {streak_count}"
 
         pct = int((xp / max_xp) * 100) if max_xp > 0 else 0
         fields.append({
-            "name": f"{medals[i]} {name}{person_streak}{pb_star}",
+            "name": f"{medals[i]} {name}{person_tags}{pb_star}",
             "value": f"`{xp:+,} XP`\n{make_bar(xp, max_xp)} `{pct}%`",
             "inline": False
         })
@@ -256,7 +251,6 @@ def main():
     king_died_msg = ""
     
     if reigning_king:
-        # Check current scrapes for King (case-insensitive)
         king_xp = 0
         for char_name, xp in current_scrapes.items():
             if char_name.strip().lower() == reigning_king.strip().lower():
