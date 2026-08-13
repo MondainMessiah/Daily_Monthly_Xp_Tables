@@ -19,7 +19,7 @@ PB_PATH = BASE_DIR / "personal_bests.json"
 TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
 
-# --- 🎬 GIF CONFIGURATION (VERIFIED GOT KING POOL) ---
+# --- 🎬 GIF CONFIGURATION ---
 KING_GIFS = [
     "https://i.giphy.com/vX79ZAsCNe6n6.gif",      # Robert Baratheon
     "https://i.giphy.com/p6jVTOTCo63cs.gif",      # Joffrey Baratheon
@@ -41,7 +41,6 @@ def fetch_data(name, dates):
         r = requests.get(final_url, timeout=45)
         if r.status_code != 200: return 0
         
-        # Pull XP
         xp_gain = 0
         rows = r.text.split('<tr')
         for row in rows:
@@ -80,7 +79,6 @@ def update_period_streak(category, winner_name):
     
     broken_msg, king_msg, event_gif = "", "", None
     
-    # Case-insensitive name comparison
     if last_winner.strip().lower() != winner_name.strip().lower():
         if last_count >= 2 and category == "daily":
             broken_msg = f"\n💔 **{last_winner}**'s streak of **{last_count}** was broken by **{winner_name}**!"
@@ -94,7 +92,7 @@ def update_period_streak(category, winner_name):
     if category == "daily" and new_count >= 3:
         selected_gif = random.choice(KING_GIFS)
         if winner_name.strip().lower() != reigning_king.strip().lower():
-            king_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne!"
+            king_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne with a 3-day streak!"
             all_streaks["reigning_king"] = winner_name
             event_gif = selected_gif
         else:
@@ -135,7 +133,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     for i, (name, xp) in enumerate(ranking[:3]):
         pb_star = " ⭐️" if name in pb_list else ""
         
-        # Build stacked status tags
         person_tags = ""
         if name.strip().lower() == current_king.strip().lower():
             person_tags += " 👑"
@@ -245,7 +242,12 @@ def main():
     
     save_json(LOG_PATH, logs)
 
-    # ⚔️ KING DETHRONEMENT ENGINE (Triggered on <= 0 XP) ⚔️
+    # Sort ranks early so we know who the daily top XP'er is
+    daily_ranks = [(name, gain) for name, gain in current_scrapes.items() if gain != 0]
+    daily_ranks.sort(key=lambda x: x[1], reverse=True)
+    top_daily_winner = daily_ranks[0][0] if daily_ranks else ""
+
+    # ⚔️ KING DETHRONEMENT & IMMEDIATE SUCCESSION ENGINE ⚔️
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
     reigning_king = all_streaks.get("reigning_king", "")
     king_died_msg = ""
@@ -259,11 +261,17 @@ def main():
 
         if king_xp <= 0:
             if king_xp < 0:
-                king_died_msg = f"\n\n💀 **THE KING HAS DIED IN BATTLE!** 💀\n**{reigning_king}** lost `{king_xp:+,} XP` and has been stripped of the crown! The throne is vacant!"
+                king_died_msg = f"\n\n💀 **THE KING HAS DIED IN BATTLE!** 💀\n**{reigning_king}** lost `{king_xp:+,} XP` and was stripped of the crown!"
             else:
-                king_died_msg = f"\n\n👑❌ **THE KING WAS INACTIVE!** 👑❌\n**{reigning_king}** gained `0 XP` and has forfeited the crown! The throne is vacant!"
+                king_died_msg = f"\n\n👑❌ **THE KING WAS INACTIVE!** 👑❌\n**{reigning_king}** gained `0 XP` and forfeited the crown!"
+            
+            # Immediately crown today's top XP earner!
+            if top_daily_winner:
+                all_streaks["reigning_king"] = top_daily_winner
+                king_died_msg += f"\n👑 **{top_daily_winner}** has instantly seized the vacant throne as the new King!"
+            else:
+                all_streaks["reigning_king"] = ""
                 
-            all_streaks["reigning_king"] = ""
             if all_streaks.get("daily", {}).get("last_winner", "").strip().lower() == reigning_king.strip().lower():
                 all_streaks["daily"] = {"last_winner": "", "count": 0}
             save_json(STREAKS_PATH, all_streaks)
@@ -278,10 +286,7 @@ def main():
         if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
         state["last_monthly"] = dates['yesterday_iso']
 
-    daily_ranks = [(name, gain) for name, gain in current_scrapes.items() if gain != 0]
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
-        daily_ranks.sort(key=lambda x: x[1], reverse=True)
-        
         sub_text = f"🗓️ Date: **{dates['yesterday_display']}**"
         if king_died_msg:
             sub_text += king_died_msg
