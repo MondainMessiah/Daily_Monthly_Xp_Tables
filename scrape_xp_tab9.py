@@ -242,7 +242,6 @@ def main():
     
     save_json(LOG_PATH, logs)
 
-    # Sort ranks early so we know who the daily top XP'er is
     daily_ranks = [(name, gain) for name, gain in current_scrapes.items() if gain != 0]
     daily_ranks.sort(key=lambda x: x[1], reverse=True)
     top_daily_winner = daily_ranks[0][0] if daily_ranks else ""
@@ -265,16 +264,21 @@ def main():
             else:
                 king_died_msg = f"\n\n👑❌ **THE KING WAS INACTIVE!** 👑❌\n**{reigning_king}** gained `0 XP` and forfeited the crown!"
             
-            # Immediately crown today's top XP earner!
-            if top_daily_winner:
-                all_streaks["reigning_king"] = top_daily_winner
-                king_died_msg += f"\n👑 **{top_daily_winner}** has instantly seized the vacant throne as the new King!"
-            else:
-                all_streaks["reigning_king"] = ""
-                
             if all_streaks.get("daily", {}).get("last_winner", "").strip().lower() == reigning_king.strip().lower():
                 all_streaks["daily"] = {"last_winner": "", "count": 0}
-            save_json(STREAKS_PATH, all_streaks)
+            
+            reigning_king = "" # Vacate the throne
+
+    # SUCCESSION: If the throne is vacant (died today OR was already empty), crown today's top earner immediately
+    if not reigning_king and top_daily_winner:
+        all_streaks["reigning_king"] = top_daily_winner
+        if king_died_msg:
+            king_died_msg += f"\n👑 **{top_daily_winner}** has instantly seized the vacant throne as the new King!"
+        else:
+            king_died_msg = f"\n\n👑 **{top_daily_winner}** has claimed the vacant throne!"
+        save_json(STREAKS_PATH, all_streaks)
+    elif king_died_msg:
+        save_json(STREAKS_PATH, all_streaks)
 
     if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
         r = get_summed_xp(logs, chars, days=7)
