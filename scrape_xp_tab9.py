@@ -82,8 +82,6 @@ def update_period_streak(category, winner_name):
     if last_winner.strip().lower() != winner_name.strip().lower():
         if last_count >= 2 and category == "daily":
             broken_msg = f"\n💔 **{last_winner}**'s streak of **{last_count}** was broken by **{winner_name}**!"
-            if last_winner.strip().lower() == reigning_king.strip().lower():
-                broken_msg += " The King has fallen..."
         new_count = 1
     else:
         new_count = last_count + 1
