@@ -5,7 +5,7 @@ on:
     # 08:25 UTC = 09:25 AM UK (BST)
     # Shifting back by 1 hour to account for the UK's BST +1 offset
     # and GitHub's typical morning scheduling delay.
-    - cron: '25 8 * * *'
+    - cron: '33 8 * * *'
   workflow_dispatch: # Allows you to run the bot manually via the "Actions" tab
 
 permissions:
