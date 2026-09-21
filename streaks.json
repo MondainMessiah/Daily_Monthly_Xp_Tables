@@ -1,15 +1,15 @@
 {
   "daily": {
-    "last_winner": "Jay The Pally",
-    "count": 2
+    "last_winner": "Kamikadzei",
+    "count": 1
   },
   "weekly": {
-    "last_winner": "Hex Good",
+    "last_winner": "Zanron The Monk",
     "count": 1
   },
   "monthly": {
     "last_winner": "Hex Good",
     "count": 1
   },
-  "reigning_king": "Jay The Pally"
+  "reigning_king": "Kamikadzei"
 }
