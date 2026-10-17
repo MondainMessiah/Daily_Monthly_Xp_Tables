@@ -51,16 +51,17 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Matched to Screenshot DOM)
+# 🛠️ THE DATA SCRAPER (Flexible Container Scan)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
-    target_date = dates['yesterday_iso']  # e.g., "2026-10-16[span_0](start_span)"[span_0](end_span)
+    target_date = dates['yesterday_iso']  # e.g., "2026-10-16"
     print(f"🌐 Fetching profile for {name} targeting date {target_date}...")
     
     encoded_name = urllib.parse.quote(name)
     urls_to_try = [
         f"https://tibiastats.pl/en/character/{encoded_name}",
-        f"https://tibiastats.pl/en/characters/{encoded_name}"
+        f"https://tibiastats.pl/en/characters/{encoded_name}",
+        f"https://tibiastats.pl/en/characters/?name={encoded_name}"
     ]
     
     for profile_url in urls_to_try:
@@ -68,19 +69,15 @@ def fetch_data_playwright(page, name, dates):
             page.goto(profile_url, wait_until="networkidle", timeout=30000)
             time.sleep(3)
             
-            try:
-                page.wait_for_selector("tr", timeout=8000)
-            except Exception:
-                continue
-
             soup = BeautifulSoup(page.content(), 'html.parser')
-            rows = soup.find_all('tr')
             
-            for row in rows:
-                row_text = " ".join(row.get_text().split())
-                
+            # Scan any tag (div, tr, li) that contains the target date text
+            elements = soup.find_all(lambda tag: tag.name in ['tr', 'div', 'li'] and target_date in tag.get_text())
+            
+            for el in elements:
+                row_text = " ".join(el.get_text().split())
                 if target_date in row_text:
-                    print(f"DEBUG {name}: Found target row -> {row_text}")
+                    print(f"DEBUG {name}: Found target element -> {row_text}")
                     numbers = re.findall(r"[\d,]{3,}", row_text)
                     if len(numbers) >= 2:
                         gain_str = numbers[1].replace(",", "")
@@ -91,7 +88,6 @@ def fetch_data_playwright(page, name, dates):
                                     gain_val = -gain_val
                                 print(f"DEBUG {name}: Parsed XP gain -> {gain_val:,}")
                                 return gain_val
-
         except Exception as e:
             print(f"DEBUG {name}: Error on {profile_url} -> {e}")
 
