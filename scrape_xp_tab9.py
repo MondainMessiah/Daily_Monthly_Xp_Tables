@@ -31,51 +31,43 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Playwright React State Dispatcher)
+# 🛠️ THE DATA SCRAPER (Playwright Row Inspector)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
-    print(f"🌐 Navigating to search page for {name}...")
+    print(f"🌐 Navigating to profile for {name}...")
     try:
         direct_url = f"https://tibiastats.pl/en/character/{urllib.parse.quote(name)}"
-        page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)
+        page.goto(direct_url, wait_until="networkidle", timeout=35000)
+        time.sleep(3)
         
         soup = BeautifulSoup(page.content(), 'html.parser')
-        iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
-        parts = iso_date.split('-')
-        alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else ""
-
-        rows = soup.find_all(['tr', 'div', 'li'])
-        for row in rows:
-            row_text = row.get_text()
-            if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
-                match = re.search(r"([+-][\d,.]+)", row_text)
-                if match:
-                    raw_val = match.group(1)
-                    digits = "".join(c for c in raw_val if c.isdigit())
-                    if digits:
-                        val = int(digits)
-                        if val < MAX_XP_THRESHOLD:
-                            xp_gain = -val if '-' in raw_val else val
-                            print(f"DEBUG {name}: Direct profile match XP -> {xp_gain}")
-                            return xp_gain
-
-        page.goto("https://tibiastats.pl/en/characters/", wait_until="networkidle", timeout=30000)
         
-        input_el = page.wait_for_selector("input", timeout=10000)
-        if input_el:
-            input_el.click()
-            page.keyboard.type(name, delay=50)
-            page.keyboard.press("Enter")
-            time.sleep(3)
-            page.wait_for_load_state("networkidle")
+        tables = soup.find_all('table')
+        print(f"DEBUG {name}: Found {len(tables)} table(s)")
+        
+        table_rows = []
+        for t in tables:
+            for tr in t.find_all('tr'):
+                text = " | ".join(td.get_text().strip() for td in tr.find_all(['td', 'th']))
+                if text:
+                    table_rows.append(text)
+                    
+        print(f"DEBUG {name}: Sample rows -> {table_rows[:8]}")
+        
+        iso_date = dates['yesterday_iso']
+        parts = iso_date.split('-')
+        alt_dates = [
+            iso_date,
+            f"{parts[2]}-{parts[1]}-{parts[0]}",
+            f"{parts[2]}.{parts[1]}.{parts[0]}",
+            f"{parts[2]}/{parts[1]}/{parts[0]}",
+            "Yesterday"
+        ]
 
-        soup_search = BeautifulSoup(page.content(), 'html.parser')
-        rows = soup_search.find_all(['tr', 'div', 'li'])
-        for row in rows:
-            row_text = row.get_text()
-            if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
-                match = re.search(r"([+-][\d,.]+)", row_text)
+        for row in table_rows:
+            if any(d.lower() in row.lower() for d in alt_dates):
+                print(f"DEBUG {name}: Matched row -> {row}")
+                match = re.search(r"([+-][\d,.]+)", row)
                 if match:
                     raw_val = match.group(1)
                     digits = "".join(c for c in raw_val if c.isdigit())
@@ -83,10 +75,9 @@ def fetch_data_playwright(page, name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
-                            print(f"DEBUG {name}: UI search match XP -> {xp_gain}")
+                            print(f"DEBUG {name}: Extracted XP gain -> {xp_gain}")
                             return xp_gain
 
-        print(f"DEBUG {name}: No XP entry found for {iso_date}")
         return 0
     except Exception as e:
         print(f"Error scraping {name} via Playwright: {e}")
