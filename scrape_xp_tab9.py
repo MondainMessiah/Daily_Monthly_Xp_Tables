@@ -9,6 +9,7 @@ import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from playwright.sync_api import sync_playwright
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -30,60 +31,71 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Next.js Data Endpoint)
+# 🛠️ THE DATA SCRAPER (Playwright Headless)
 # ==========================================
-def fetch_data(name, dates):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://tibiastats.pl/en/characters/"
-    }
+def fetch_data_playwright(page, name, dates):
+    search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
+    print(f"🌐 Navigating to search URL for {name}...")
     
-    encoded_name = urllib.parse.quote(name)
-    iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
-    parts = iso_date.split('-')
-    alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else "" # e.g., "16-10-2026"
-    
-    # Target Next.js data routes directly
-    next_routes = [
-        f"https://tibiastats.pl/en/character/{encoded_name}?_data=routes%2Fcharacter%2F%24name",
-        f"https://tibiastats.pl/en/characters/?_data=routes%2Fcharacters",
-        f"https://tibiastats.pl/api/character/{encoded_name}"
-    ]
-    
-    for url in next_routes:
-        try:
-            r = requests.get(url, headers=headers, timeout=15)
-            print(f"DEBUG {name}: Next.js route {url} -> Status {r.status_code}")
-            if r.status_code == 200:
-                try:
-                    data = r.json()
-                    raw_str = json.dumps(data)
-                    print(f"DEBUG {name}: Route payload length -> {len(raw_str)}")
+    try:
+        page.goto(search_url, wait_until="networkidle", timeout=45000)
+        time.sleep(2) # Allow JS hydration
+        
+        # Look for character profile link rendered after JS load
+        html = page.content()
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        profile_link = None
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            text = a.get_text().strip()
+            if name.lower() in text.lower() or name.lower() in href.lower():
+                if '/en/characters/' not in href and href != '/en/':
+                    profile_link = href
+                    break
                     
-                    # Search payload for yesterday's date
-                    if iso_date in raw_str or alt_date_format in raw_str:
-                        # Extract the gain associated with that date entry
-                        pattern = rf'(?:"date"|"day")?:\s*"{iso_date}".*?([+-]?[\d,.]+)'
-                        match = re.search(pattern, raw_str)
-                        if not match:
-                            match = re.search(r"([+-][\d,.]+)", raw_str)
-                            
-                        if match:
-                            raw_val = match.group(1)
-                            digits = "".join(c for c in raw_val if c.isdigit())
-                            if digits:
-                                val = int(digits)
-                                if val < MAX_XP_THRESHOLD:
-                                    gain = -val if '-' in raw_val else val
-                                    print(f"DEBUG {name}: Successfully extracted XP gain -> {gain}")
-                                    return gain
-                except Exception as json_err:
-                    print(f"DEBUG {name}: JSON parse error -> {json_err}")
-        except Exception as e:
-            print(f"DEBUG {name}: Request error for {url} -> {e}")
+        if not profile_link:
+            # Fallback to first non-nav result link
+            for a in soup.select("table a, div[class*='character'] a, main a"):
+                href = a.get('href', '')
+                if href and href not in ['/en/', '/en/characters/']:
+                    profile_link = href
+                    break
 
-    return 0
+        if profile_link:
+            if not profile_link.startswith('http'):
+                profile_link = f"https://tibiastats.pl{profile_link}"
+            print(f"DEBUG {name}: Navigating to profile -> {profile_link}")
+            page.goto(profile_link, wait_until="networkidle", timeout=45000)
+            time.sleep(2)
+            html = page.content()
+            soup = BeautifulSoup(html, 'html.parser')
+
+        # Parse yesterday's XP row from rendered HTML
+        xp_gain = 0
+        iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
+        parts = iso_date.split('-')
+        alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else ""
+
+        rows = soup.find_all(['tr', 'div', 'li'])
+        for row in rows:
+            row_text = row.get_text()
+            if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
+                match = re.search(r"([+-][\d,.]+)", row_text)
+                if match:
+                    raw_val = match.group(1)
+                    digits = "".join(c for c in raw_val if c.isdigit())
+                    if digits:
+                        val = int(digits)
+                        if val < MAX_XP_THRESHOLD:
+                            xp_gain = -val if '-' in raw_val else val
+                            print(f"DEBUG {name}: Parsed XP gain -> {xp_gain}")
+                            return xp_gain
+
+        return xp_gain
+    except Exception as e:
+        print(f"Error scraping {name} via Playwright: {e}")
+        return 0
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
@@ -239,14 +251,21 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Scraping TibiaStats for {dates['yesterday_iso']}...")
+    print(f"🌐 Starting Playwright scraper for {dates['yesterday_iso']}...")
     current_scrapes = {}; daily_pb_achievers = []; total_non_zero = 0
 
-    for name in chars:
-        gain = fetch_data(name, dates)
-        current_scrapes[name] = gain
-        if gain != 0: total_non_zero += 1
-        time.sleep(1.5)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        page = context.new_page()
+
+        for name in chars:
+            gain = fetch_data_playwright(page, name, dates)
+            current_scrapes[name] = gain
+            if gain != 0: total_non_zero += 1
+            time.sleep(1)
+
+        browser.close()
 
     if total_non_zero == 0:
         print(f"🛑 ANTI-ZERO TRIGGERED.")
