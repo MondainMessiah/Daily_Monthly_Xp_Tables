@@ -29,7 +29,7 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER
+# 🛠️ THE DATA SCRAPER (WITH DIAGNOSTICS)
 # ==========================================
 def fetch_data(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
@@ -39,7 +39,9 @@ def fetch_data(name, dates):
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
     try:
         r = requests.get(final_url, timeout=45)
-        if r.status_code != 200: return 0
+        if r.status_code != 200:
+            print(f"⚠️ [{name}] HTTP Status Error: {r.status_code}")
+            return 0
         
         xp_gain = 0
         iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
@@ -48,7 +50,6 @@ def fetch_data(name, dates):
         
         rows = r.text.split('<tr')
         for row in rows:
-            # Check for standard ISO format or common European table formats
             if iso_date in row or (alt_date_format and alt_date_format in row):
                 match = re.search(r"text-(?:green|red)-400\">([+-][\d,.]+)", row)
                 if match:
@@ -58,8 +59,14 @@ def fetch_data(name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
-        return xp_gain
-    except: return 0
+                            return xp_gain
+                            
+        # Diagnostic fallback print if zero was found so we see a sample of what the page returned
+        print(f"⚠️ [{name}] Date '{iso_date}' not found in HTML snippet. Snippet preview: {r.text[:150].strip()}")
+        return 0
+    except Exception as e:
+        print(f"❌ [{name}] Request exception: {e}")
+        return 0
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
@@ -236,7 +243,8 @@ def main():
         time.sleep(1.5)
 
     if total_non_zero == 0:
-        print(f"🛑 ANTI-ZERO TRIGGERED."); return 
+        print(f"🛑 ANTI-ZERO TRIGGERED.")
+        return 
 
     for name, gain in current_scrapes.items():
         if name not in logs: logs[name] = {}
