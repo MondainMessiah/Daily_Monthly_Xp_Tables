@@ -30,10 +30,10 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (TibiaStats Direct with Debug)
+# 🛠️ THE DATA SCRAPER (TibiaStats Search & Profile)
 # ==========================================
 def fetch_data(name, dates):
-    char_url = f"https://tibiastats.pl/en/character/{urllib.parse.quote(name)}"
+    search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}[span_1](start_span)"[span_1](end_span)
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -43,37 +43,42 @@ def fetch_data(name, dates):
     }
     
     try:
-        r = requests.get(char_url, headers=headers, timeout=30)
-        print(f"DEBUG {name}: Status {r.status_code}, Length {len(r.text)}")
+        r = requests.get(search_url, headers=headers, timeout=30)
+        if r.status_code != 200: 
+            return 0
         
-        if r.status_code != 200:
-            search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
-            r = requests.get(search_url, headers=headers, timeout=30)
-            if r.status_code != 200: 
-                return 0
-            
-            soup = BeautifulSoup(r.text, 'html.parser')
-            link = soup.select_one("a[href*='/character/']")
-            if link and link.get('href'):
-                profile_link = link['href']
-                if not profile_link.startswith('http'):
-                    profile_link = f"https://tibiastats.pl{profile_link}"
-                r = requests.get(profile_link, headers=headers, timeout=30)
-                if r.status_code != 200: 
-                    return 0
-
         soup = BeautifulSoup(r.text, 'html.parser')
-        tables = soup.find_all('table')
-        print(f"DEBUG {name}: Found {len(tables)} tables on page.")
-        for i, t in enumerate(tables[:2]):
-            print(f"TABLE {i} snippet: {t.get_text()[:200].strip()}")
-
-        xp_gain = 0
-        iso_date = dates['yesterday_iso']
-        parts = iso_date.split('-')
-        alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else ""
         
-        rows = soup.find_all('tr')
+        # Find the link corresponding to the character in the search results
+        profile_link = None
+        for a in soup.find_all('a', href=True):
+            if '/character/' in a['href'] and name.lower() in a.get_text().lower():
+                profile_link = a['href']
+                break
+        
+        # Fallback to the first character link if exact name match in text isn't found
+        if not profile_link:
+            link = soup.select_one("a[href*='/character/']")
+            if link:
+                profile_link = link['href']
+                
+        if not profile_link:
+            return 0
+            
+        if not profile_link.startswith('http'):
+            profile_link = f"https://tibiastats.pl{profile_link}"
+            
+        r_profile = requests.get(profile_link, headers=headers, timeout=30)
+        if r_profile.status_code != 200:
+            return 0
+            
+        soup_profile = BeautifulSoup(r_profile.text, 'html.parser')
+        xp_gain = 0
+        iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
+        parts = iso_date.split('-')
+        alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else "" # e.g., "16-10-2026"
+        
+        rows = soup_profile.find_all('tr')
         for row in rows:
             row_text = row.get_text()
             if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
