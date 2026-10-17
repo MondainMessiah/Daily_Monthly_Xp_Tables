@@ -1,14 +1,16 @@
 name: Run Tibia XP Tracker
 
 on:
-  scheduled:
-    - cron: '0 3 * * *' # Runs daily at 3:00 AM (adjust as needed)
-  workflow_dispatch:      # Allows manual trigger from GitHub UI
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
 
 jobs:
   track-xp:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,7 +31,7 @@ jobs:
         run: |
           python scrape_xp_tab9.py
 
-      - name: Commit and push changes if any
+      - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
