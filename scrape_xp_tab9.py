@@ -30,7 +30,7 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Next.js API Direct Probe)
+# 🛠️ THE DATA SCRAPER (Next.js Data Endpoint)
 # ==========================================
 def fetch_data(name, dates):
     headers = {
@@ -40,40 +40,50 @@ def fetch_data(name, dates):
     }
     
     encoded_name = urllib.parse.quote(name)
-    api_urls = [
-        f"https://tibiastats.pl/api/character/{encoded_name}",
-        f"https://tibiastats.pl/api/characters?name={encoded_name}",
-        f"https://tibiastats.pl/api/v1/character/{encoded_name}"
+    iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
+    parts = iso_date.split('-')
+    alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else "" # e.g., "16-10-2026"
+    
+    # Target Next.js data routes directly
+    next_routes = [
+        f"https://tibiastats.pl/en/character/{encoded_name}?_data=routes%2Fcharacter%2F%24name",
+        f"https://tibiastats.pl/en/characters/?_data=routes%2Fcharacters",
+        f"https://tibiastats.pl/api/character/{encoded_name}"
     ]
     
-    xp_gain = 0
-    iso_date = dates['yesterday_iso']
-    parts = iso_date.split('-')
-    alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else ""
-
-    for url in api_urls:
+    for url in next_routes:
         try:
-            r = requests.get(url, headers=headers, timeout=10)
-            print(f"DEBUG {name}: Endpoint {url} -> Status {r.status_code}")
+            r = requests.get(url, headers=headers, timeout=15)
+            print(f"DEBUG {name}: Next.js route {url} -> Status {r.status_code}")
             if r.status_code == 200:
                 try:
                     data = r.json()
-                    print(f"DEBUG {name}: Got JSON response! Keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-                    # If JSON history is found, parse it
                     raw_str = json.dumps(data)
-                    match = re.search(r"([+-][\d,.]+)", raw_str)
-                    if match:
-                        digits = "".join(c for c in match.group(1) if c.isdigit())
-                        if digits:
-                            val = int(digits)
-                            if val < MAX_XP_THRESHOLD:
-                                return -val if '-' in match.group(1) else val
+                    print(f"DEBUG {name}: Route payload length -> {len(raw_str)}")
+                    
+                    # Search payload for yesterday's date
+                    if iso_date in raw_str or alt_date_format in raw_str:
+                        # Extract the gain associated with that date entry
+                        pattern = rf'(?:"date"|"day")?:\s*"{iso_date}".*?([+-]?[\d,.]+)'
+                        match = re.search(pattern, raw_str)
+                        if not match:
+                            match = re.search(r"([+-][\d,.]+)", raw_str)
+                            
+                        if match:
+                            raw_val = match.group(1)
+                            digits = "".join(c for c in raw_val if c.isdigit())
+                            if digits:
+                                val = int(digits)
+                                if val < MAX_XP_THRESHOLD:
+                                    gain = -val if '-' in raw_val else val
+                                    print(f"DEBUG {name}: Successfully extracted XP gain -> {gain}")
+                                    return gain
                 except Exception as json_err:
-                    print(f"DEBUG {name}: JSON decode err -> {json_err}")
+                    print(f"DEBUG {name}: JSON parse error -> {json_err}")
         except Exception as e:
-            print(f"DEBUG {name}: Request error -> {e}")
+            print(f"DEBUG {name}: Request error for {url} -> {e}")
 
-    return xp_gain
+    return 0
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
@@ -289,4 +299,13 @@ def main():
         state["last_monthly"] = dates['yesterday_iso']
 
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
-        sub
+        sub_text = f"🗓️ Date: **{dates['yesterday_display']}**"
+        if king_died_msg:
+            sub_text += king_died_msg
+        send_discord_post("Daily Champion", sub_text, daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers)
+        state["last_daily"] = dates['yesterday_iso']
+
+    save_json(STATE_PATH, state)
+
+if __name__ == "__main__":
+    main()
