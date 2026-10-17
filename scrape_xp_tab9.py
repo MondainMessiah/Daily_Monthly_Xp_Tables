@@ -30,7 +30,7 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (TibiaStats Search & Profile Inspector)
+# 🛠️ THE DATA SCRAPER (Filtered Search & Profile)
 # ==========================================
 def fetch_data(name, dates):
     search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
@@ -44,40 +44,40 @@ def fetch_data(name, dates):
     
     try:
         r = requests.get(search_url, headers=headers, timeout=30)
-        print(f"DEBUG {name}: Search status {r.status_code}")
         if r.status_code != 200: 
             return 0
         
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        # Inspect all links on the search results page
-        all_links = [(a.get('href'), a.get_text().strip()) for a in soup.find_all('a', href=True)]
-        print(f"DEBUG {name}: Sample links found -> {all_links[:10]}")
-        
         profile_link = None
-        for href, text in all_links:
+        ignored_links = {'/en/', '/en/characters/', '/en/highscores/experience/', '/en/compare/characters/', '/en/worlds/', '/en/hunting-places/', '/en/quests/', '/en/monsters/', '/en/encyklopedia/'}
+        
+        # Look specifically inside table rows or result sections to avoid navbar
+        for a in soup.select('table a, .search-results a, ul.results a, div.character-list a, td a, tr a'):
+            href = a.get('href', '')
+            text = a.get_text().strip()
+            if href in ignored_links:
+                continue
             if name.lower() in text.lower() or name.lower() in href.lower():
                 profile_link = href
                 break
                 
-        if not profile_link and all_links:
-            for href, text in all_links:
-                if any(k in href.lower() for k in ['char', 'player', 'stat', 'profile', 'id']):
+        # Fallback search across general links excluding navbar
+        if not profile_link:
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if href.startswith('/en/') and href not in ignored_links:
                     profile_link = href
                     break
-                    
-        print(f"DEBUG {name}: Resolved profile_link -> {profile_link}")
+
+        print(f"DEBUG {name}: Filtered profile_link -> {profile_link}")
         if not profile_link:
             return 0
             
         if not profile_link.startswith('http'):
-            if profile_link.startswith('/'):
-                profile_link = f"https://tibiastats.pl{profile_link}"
-            else:
-                profile_link = f"https://tibiastats.pl/en/characters/{profile_link}"
-                
+            profile_link = f"https://tibiastats.pl{profile_link}"
+            
         r_profile = requests.get(profile_link, headers=headers, timeout=30)
-        print(f"DEBUG {name}: Profile page status {r_profile.status_code}")
         if r_profile.status_code != 200:
             return 0
             
@@ -87,7 +87,7 @@ def fetch_data(name, dates):
         parts = iso_date.split('-')
         alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else "" # e.g., "16-10-2026"
         
-        rows = soup_profile.find_all(['tr', 'li', 'div'])
+        rows = soup_profile.find_all('tr')
         for row in rows:
             row_text = row.get_text()
             if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
@@ -99,7 +99,6 @@ def fetch_data(name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
-        print(f"DEBUG {name}: Final parsed XP gain -> {xp_gain}")
         return xp_gain
     except Exception as e:
         print(f"Error scraping {name}: {e}")
