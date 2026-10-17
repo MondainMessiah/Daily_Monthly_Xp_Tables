@@ -30,6 +30,26 @@ KING_GIFS = [
     "https://i.giphy.com/l41YedIBvT817KOF2.gif"    # Tommen Baratheon
 ]
 
+def get_dates():
+    tz = ZoneInfo(TIMEZONE)
+    now = datetime.now(tz)
+    
+    # Tibia server save runs around 09:00-10:00 UTC. 
+    # If running early in the morning before save populates, look back 2 days.
+    if now.hour < 10:
+        target_date = now - timedelta(days=2)
+    else:
+        target_date = now - timedelta(days=1)
+        
+    return {
+        "yesterday_iso": target_date.strftime("%Y-%m-%d"),
+        "yesterday_display": target_date.strftime("%d-%m-%y"),
+        "month_filter": target_date.strftime("%Y-%m"),
+        "is_monday": now.weekday() == 0,
+        "is_first": now.day == 1,
+        "month_name": target_date.strftime("%B")
+    }
+
 # ==========================================
 # 🛠️ THE DATA SCRAPER (Playwright Dynamic Container Scraper)
 # ==========================================
@@ -58,7 +78,7 @@ def fetch_data_playwright(page, name, dates):
 
         soup = BeautifulSoup(page.content(), 'html.parser')
         
-        iso_date = dates['yesterday_iso']
+        iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
         parts = iso_date.split('-')
         alt_dates = [
             iso_date,
@@ -80,10 +100,10 @@ def fetch_data_playwright(page, name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
-                            print(f"DEBUG {name}: Matched XP -> {xp_gain} in text: '{text[:80]}'")
+                            print(f"DEBUG {name}: Matched XP for {iso_date} -> {xp_gain} in text: '{text[:80]}'")
                             return xp_gain
 
-        print(f"DEBUG {name}: No XP entry found for dates {alt_dates[:2]}")
+        print(f"DEBUG {name}: No XP entry found for date {iso_date}")
         return 0
     except Exception as e:
         print(f"Error scraping {name} via Playwright: {e}")
@@ -234,16 +254,12 @@ def load_json(path, fallback=None):
 def save_json(path, data):
     with open(path, "w") as f: json.dump(data, f, indent=2)
 
-def get_dates():
-    tz = ZoneInfo(TIMEZONE); now = datetime.now(tz); yesterday_obj = now - timedelta(days=1)
-    return { "yesterday_iso": yesterday_obj.strftime("%Y-%m-%d"), "yesterday_display": yesterday_obj.strftime("%d-%m-%y"), "month_filter": yesterday_obj.strftime("%Y-%m"), "is_monday": now.weekday() == 0, "is_first": now.day == 1, "month_name": yesterday_obj.strftime("%B") }
-
 def main():
     dates = get_dates(); logs, state = load_json(LOG_PATH), load_json(STATE_PATH)
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Starting Playwright scraper for {dates['yesterday_iso']}...")
+    print(f"🌐 Starting Playwright scraper for target date {dates['yesterday_iso']}...")
     current_scrapes = {}; daily_pb_achievers = []; total_non_zero = 0
 
     with sync_playwright() as p:
