@@ -30,7 +30,7 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Filtered Search & Profile)
+# 🛠️ THE DATA SCRAPER (TibiaStats Inspector)
 # ==========================================
 def fetch_data(name, dates):
     search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
@@ -44,64 +44,32 @@ def fetch_data(name, dates):
     
     try:
         r = requests.get(search_url, headers=headers, timeout=30)
-        if r.status_code != 200: 
-            return 0
+        print(f"DEBUG {name}: GET status {r.status_code}")
         
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        profile_link = None
-        ignored_links = {'/en/', '/en/characters/', '/en/highscores/experience/', '/en/compare/characters/', '/en/worlds/', '/en/hunting-places/', '/en/quests/', '/en/monsters/', '/en/encyklopedia/'}
-        
-        # Look specifically inside table rows or result sections to avoid navbar
-        for a in soup.select('table a, .search-results a, ul.results a, div.character-list a, td a, tr a'):
-            href = a.get('href', '')
-            text = a.get_text().strip()
-            if href in ignored_links:
-                continue
-            if name.lower() in text.lower() or name.lower() in href.lower():
-                profile_link = href
-                break
-                
-        # Fallback search across general links excluding navbar
-        if not profile_link:
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                if href.startswith('/en/') and href not in ignored_links:
-                    profile_link = href
-                    break
+        # 1. Print all forms on the page to inspect search submission method
+        forms = soup.find_all('form')
+        print(f"DEBUG {name}: Found {len(forms)} form(s)")
+        for i, form in enumerate(forms):
+            print(f"  Form {i} action: {form.get('action')}, method: {form.get('method')}")
+            inputs = [(inp.get('name'), inp.get('type'), inp.get('value')) for inp in form.find_all('input')]
+            print(f"  Form {i} inputs: {inputs}")
 
-        print(f"DEBUG {name}: Filtered profile_link -> {profile_link}")
-        if not profile_link:
-            return 0
-            
-        if not profile_link.startswith('http'):
-            profile_link = f"https://tibiastats.pl{profile_link}"
-            
-        r_profile = requests.get(profile_link, headers=headers, timeout=30)
-        if r_profile.status_code != 200:
-            return 0
-            
-        soup_profile = BeautifulSoup(r_profile.text, 'html.parser')
-        xp_gain = 0
-        iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
-        parts = iso_date.split('-')
-        alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else "" # e.g., "16-10-2026"
+        # 2. Print external script tags
+        scripts = [s.get('src') for s in soup.find_all('script') if s.get('src')]
+        print(f"DEBUG {name}: Script files -> {scripts[:5]}")
         
-        rows = soup_profile.find_all('tr')
-        for row in rows:
-            row_text = row.get_text()
-            if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
-                match = re.search(r"([+-][\d,.]+)", row_text)
-                if match:
-                    raw_val = match.group(1)
-                    digits = "".join(c for c in raw_val if c.isdigit())
-                    if digits:
-                        val = int(digits)
-                        if val < MAX_XP_THRESHOLD:
-                            xp_gain = -val if '-' in raw_val else val
-        return xp_gain
+        # 3. Print main container snippet
+        main_content = soup.find('main') or soup.find('div', id=re.compile('content|main|app', re.I))
+        if main_content:
+            print(f"DEBUG {name}: Main container snippet -> {main_content.get_text()[:300].strip()}")
+        else:
+            print(f"DEBUG {name}: Body text snippet -> {soup.body.get_text()[:300].strip() if soup.body else 'No body'}")
+
+        return 0
     except Exception as e:
-        print(f"Error scraping {name}: {e}")
+        print(f"Error inspecting {name}: {e}")
         return 0
 
 # ==========================================
