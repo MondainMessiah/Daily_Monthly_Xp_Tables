@@ -30,10 +30,9 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (TibiaStats Direct)
+# 🛠️ THE DATA SCRAPER (TibiaStats Direct with Debug)
 # ==========================================
 def fetch_data(name, dates):
-    # Try direct character profile URL structure first
     char_url = f"https://tibiastats.pl/en/character/{urllib.parse.quote(name)}"
     
     headers = {
@@ -45,8 +44,8 @@ def fetch_data(name, dates):
     
     try:
         r = requests.get(char_url, headers=headers, timeout=30)
+        print(f"DEBUG {name}: Status {r.status_code}, Length {len(r.text)}")
         
-        # If direct profile URL fails, fallback to search page and grab the first profile link
         if r.status_code != 200:
             search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
             r = requests.get(search_url, headers=headers, timeout=30)
@@ -62,12 +61,17 @@ def fetch_data(name, dates):
                 r = requests.get(profile_link, headers=headers, timeout=30)
                 if r.status_code != 200: 
                     return 0
-        
+
         soup = BeautifulSoup(r.text, 'html.parser')
+        tables = soup.find_all('table')
+        print(f"DEBUG {name}: Found {len(tables)} tables on page.")
+        for i, t in enumerate(tables[:2]):
+            print(f"TABLE {i} snippet: {t.get_text()[:200].strip()}")
+
         xp_gain = 0
-        iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
+        iso_date = dates['yesterday_iso']
         parts = iso_date.split('-')
-        alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else "" # e.g., "16-10-2026"
+        alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else ""
         
         rows = soup.find_all('tr')
         for row in rows:
