@@ -30,47 +30,50 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (TibiaStats Inspector)
+# 🛠️ THE DATA SCRAPER (Next.js API Direct Probe)
 # ==========================================
 def fetch_data(name, dates):
-    search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
-    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://tibiastats.pl/en/"
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://tibiastats.pl/en/characters/"
     }
     
-    try:
-        r = requests.get(search_url, headers=headers, timeout=30)
-        print(f"DEBUG {name}: GET status {r.status_code}")
-        
-        soup = BeautifulSoup(r.text, 'html.parser')
-        
-        # 1. Print all forms on the page to inspect search submission method
-        forms = soup.find_all('form')
-        print(f"DEBUG {name}: Found {len(forms)} form(s)")
-        for i, form in enumerate(forms):
-            print(f"  Form {i} action: {form.get('action')}, method: {form.get('method')}")
-            inputs = [(inp.get('name'), inp.get('type'), inp.get('value')) for inp in form.find_all('input')]
-            print(f"  Form {i} inputs: {inputs}")
+    encoded_name = urllib.parse.quote(name)
+    api_urls = [
+        f"https://tibiastats.pl/api/character/{encoded_name}",
+        f"https://tibiastats.pl/api/characters?name={encoded_name}",
+        f"https://tibiastats.pl/api/v1/character/{encoded_name}"
+    ]
+    
+    xp_gain = 0
+    iso_date = dates['yesterday_iso']
+    parts = iso_date.split('-')
+    alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else ""
 
-        # 2. Print external script tags
-        scripts = [s.get('src') for s in soup.find_all('script') if s.get('src')]
-        print(f"DEBUG {name}: Script files -> {scripts[:5]}")
-        
-        # 3. Print main container snippet
-        main_content = soup.find('main') or soup.find('div', id=re.compile('content|main|app', re.I))
-        if main_content:
-            print(f"DEBUG {name}: Main container snippet -> {main_content.get_text()[:300].strip()}")
-        else:
-            print(f"DEBUG {name}: Body text snippet -> {soup.body.get_text()[:300].strip() if soup.body else 'No body'}")
+    for url in api_urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            print(f"DEBUG {name}: Endpoint {url} -> Status {r.status_code}")
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                    print(f"DEBUG {name}: Got JSON response! Keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+                    # If JSON history is found, parse it
+                    raw_str = json.dumps(data)
+                    match = re.search(r"([+-][\d,.]+)", raw_str)
+                    if match:
+                        digits = "".join(c for c in match.group(1) if c.isdigit())
+                        if digits:
+                            val = int(digits)
+                            if val < MAX_XP_THRESHOLD:
+                                return -val if '-' in match.group(1) else val
+                except Exception as json_err:
+                    print(f"DEBUG {name}: JSON decode err -> {json_err}")
+        except Exception as e:
+            print(f"DEBUG {name}: Request error -> {e}")
 
-        return 0
-    except Exception as e:
-        print(f"Error inspecting {name}: {e}")
-        return 0
+    return xp_gain
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
@@ -286,13 +289,4 @@ def main():
         state["last_monthly"] = dates['yesterday_iso']
 
     if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
-        sub_text = f"🗓️ Date: **{dates['yesterday_display']}**"
-        if king_died_msg:
-            sub_text += king_died_msg
-        send_discord_post("Daily Champion", sub_text, daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers)
-        state["last_daily"] = dates['yesterday_iso']
-
-    save_json(STATE_PATH, state)
-
-if __name__ == "__main__":
-    main()
+        sub
