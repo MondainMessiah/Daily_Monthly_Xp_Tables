@@ -31,28 +31,32 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Playwright Row Inspector)
+# 🛠️ THE DATA SCRAPER (Playwright Dynamic Container Scraper)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
-    print(f"🌐 Navigating to profile for {name}...")
+    print(f"🌐 Searching TibiaStats UI for {name}...")
     try:
-        direct_url = f"https://tibiastats.pl/en/character/{urllib.parse.quote(name)}"
-        page.goto(direct_url, wait_until="networkidle", timeout=35000)
-        time.sleep(3)
+        page.goto("https://tibiastats.pl/en/characters/", wait_until="networkidle", timeout=35000)
+        time.sleep(2)
         
+        search_input = page.wait_for_selector("input", timeout=10000)
+        if search_input:
+            search_input.click()
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            search_input.fill(name)
+            time.sleep(1)
+            
+            button = page.query_selector("button[type='submit'], button")
+            if button:
+                button.click()
+            else:
+                page.keyboard.press("Enter")
+                
+            time.sleep(4)
+            page.wait_for_load_state("networkidle")
+
         soup = BeautifulSoup(page.content(), 'html.parser')
-        
-        tables = soup.find_all('table')
-        print(f"DEBUG {name}: Found {len(tables)} table(s)")
-        
-        table_rows = []
-        for t in tables:
-            for tr in t.find_all('tr'):
-                text = " | ".join(td.get_text().strip() for td in tr.find_all(['td', 'th']))
-                if text:
-                    table_rows.append(text)
-                    
-        print(f"DEBUG {name}: Sample rows -> {table_rows[:8]}")
         
         iso_date = dates['yesterday_iso']
         parts = iso_date.split('-')
@@ -64,10 +68,11 @@ def fetch_data_playwright(page, name, dates):
             "Yesterday"
         ]
 
-        for row in table_rows:
-            if any(d.lower() in row.lower() for d in alt_dates):
-                print(f"DEBUG {name}: Matched row -> {row}")
-                match = re.search(r"([+-][\d,.]+)", row)
+        elements = soup.find_all(['tr', 'div', 'li', 'p'])
+        for el in elements:
+            text = el.get_text().strip()
+            if any(d.lower() in text.lower() for d in alt_dates):
+                match = re.search(r"([+-][\d,.]+)", text)
                 if match:
                     raw_val = match.group(1)
                     digits = "".join(c for c in raw_val if c.isdigit())
@@ -75,9 +80,10 @@ def fetch_data_playwright(page, name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
-                            print(f"DEBUG {name}: Extracted XP gain -> {xp_gain}")
+                            print(f"DEBUG {name}: Matched XP -> {xp_gain} in text: '{text[:80]}'")
                             return xp_gain
 
+        print(f"DEBUG {name}: No XP entry found for dates {alt_dates[:2]}")
         return 0
     except Exception as e:
         print(f"Error scraping {name} via Playwright: {e}")
