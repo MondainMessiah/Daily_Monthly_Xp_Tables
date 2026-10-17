@@ -42,9 +42,14 @@ def fetch_data(name, dates):
         if r.status_code != 200: return 0
         
         xp_gain = 0
+        iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
+        parts = iso_date.split('-')
+        alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else "" # e.g., "16-10-2026"
+        
         rows = r.text.split('<tr')
         for row in rows:
-            if dates['yesterday_iso'] in row:
+            # Check for standard ISO format or common European table formats
+            if iso_date in row or (alt_date_format and alt_date_format in row):
                 match = re.search(r"text-(?:green|red)-400\">([+-][\d,.]+)", row)
                 if match:
                     raw_val = match.group(1)
