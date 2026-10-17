@@ -31,54 +31,21 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Playwright Input & Search)
+# 🛠️ THE DATA SCRAPER (Playwright React State Dispatcher)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
     print(f"🌐 Navigating to search page for {name}...")
     try:
-        page.goto("https://tibiastats.pl/en/characters/", wait_until="networkidle", timeout=45000)
+        direct_url = f"https://tibiastats.pl/en/character/{urllib.parse.quote(name)}"
+        page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(2)
         
-        # Locate search input field and submit character name
-        search_input = page.wait_for_selector("input", timeout=10000)
-        if search_input:
-            search_input.fill(name)
-            search_input.press("Enter")
-            time.sleep(3)
-            page.wait_for_load_state("networkidle")
-            
-        # Find the resulting character profile link
-        profile_link = None
-        anchors = page.query_selector_all("a")
-        for a in anchors:
-            href = a.get_attribute("href") or ""
-            text = a.inner_text().strip()
-            if name.lower() in text.lower() or name.lower() in href.lower():
-                if href not in ['/en/', '/en/characters/']:
-                    profile_link = href
-                    break
-                    
-        if not profile_link:
-            rows = page.query_selector_all("tr a, div[class*='result'] a")
-            for a in rows:
-                href = a.get_attribute("href") or ""
-                if href and href not in ['/en/', '/en/characters/']:
-                    profile_link = href
-                    break
-        
-        print(f"DEBUG {name}: Resolved profile link -> {profile_link}")
-        if profile_link:
-            if not profile_link.startswith('http'):
-                profile_link = f"https://tibiastats.pl{profile_link}"
-            page.goto(profile_link, wait_until="networkidle", timeout=45000)
-            time.sleep(2)
-            
-        soup_profile = BeautifulSoup(page.content(), 'html.parser')
-        xp_gain = 0
+        soup = BeautifulSoup(page.content(), 'html.parser')
         iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
         parts = iso_date.split('-')
         alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else ""
 
-        rows = soup_profile.find_all(['tr', 'div', 'li'])
+        rows = soup.find_all(['tr', 'div', 'li'])
         for row in rows:
             row_text = row.get_text()
             if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
@@ -90,10 +57,37 @@ def fetch_data_playwright(page, name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
-                            print(f"DEBUG {name}: Parsed XP gain -> {xp_gain}")
+                            print(f"DEBUG {name}: Direct profile match XP -> {xp_gain}")
                             return xp_gain
 
-        return xp_gain
+        page.goto("https://tibiastats.pl/en/characters/", wait_until="networkidle", timeout=30000)
+        
+        input_el = page.wait_for_selector("input", timeout=10000)
+        if input_el:
+            input_el.click()
+            page.keyboard.type(name, delay=50)
+            page.keyboard.press("Enter")
+            time.sleep(3)
+            page.wait_for_load_state("networkidle")
+
+        soup_search = BeautifulSoup(page.content(), 'html.parser')
+        rows = soup_search.find_all(['tr', 'div', 'li'])
+        for row in rows:
+            row_text = row.get_text()
+            if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
+                match = re.search(r"([+-][\d,.]+)", row_text)
+                if match:
+                    raw_val = match.group(1)
+                    digits = "".join(c for c in raw_val if c.isdigit())
+                    if digits:
+                        val = int(digits)
+                        if val < MAX_XP_THRESHOLD:
+                            xp_gain = -val if '-' in raw_val else val
+                            print(f"DEBUG {name}: UI search match XP -> {xp_gain}")
+                            return xp_gain
+
+        print(f"DEBUG {name}: No XP entry found for {iso_date}")
+        return 0
     except Exception as e:
         print(f"Error scraping {name} via Playwright: {e}")
         return 0
