@@ -51,29 +51,52 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Flexible Container Scan)
+# 🛠️ THE DATA SCRAPER (Interactive Search & Link Inspector)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
     target_date = dates['yesterday_iso']  # e.g., "2026-10-16"
-    print(f"🌐 Fetching profile for {name} targeting date {target_date}...")
+    print(f"🌐 Searching TibiaStats for {name} targeting date {target_date}...")
     
-    encoded_name = urllib.parse.quote(name)
-    urls_to_try = [
-        f"https://tibiastats.pl/en/character/{encoded_name}",
-        f"https://tibiastats.pl/en/characters/{encoded_name}",
-        f"https://tibiastats.pl/en/characters/?name={encoded_name}"
-    ]
-    
-    for profile_url in urls_to_try:
-        try:
+    try:
+        page.goto("https://tibiastats.pl/en/characters/", wait_until="networkidle", timeout=30000)
+        time.sleep(2)
+        
+        input_el = page.wait_for_selector("input", timeout=10000)
+        if input_el:
+            input_el.click()
+            input_el.fill(name)
+            time.sleep(3) # Wait for dropdown/autocomplete results
+            
+        soup_search = BeautifulSoup(page.content(), 'html.parser')
+        links = [(a.get('href'), a.get_text().strip()) for a in soup_search.find_all('a', href=True)]
+        print(f"DEBUG {name}: Links after typing name -> {links[:20]}")
+        
+        profile_url = None
+        for href, text in links:
+            if name.lower() in text.lower() or name.lower() in href.lower():
+                if href not in ['/en/', '/en/characters/']:
+                    profile_url = href
+                    break
+                    
+        if not profile_url:
+            page.keyboard.press("Enter")
+            time.sleep(3)
+            soup_search = BeautifulSoup(page.content(), 'html.parser')
+            for a in soup_search.find_all('a', href=True):
+                href = a.get('href', '')
+                if href and href not in ['/en/', '/en/characters/']:
+                    profile_url = href
+                    break
+                    
+        if profile_url:
+            if not profile_url.startswith('http'):
+                profile_url = f"https://tibiastats.pl{profile_url}"
+            print(f"DEBUG {name}: Navigating to resolved profile -> {profile_url}")
             page.goto(profile_url, wait_until="networkidle", timeout=30000)
             time.sleep(3)
             
             soup = BeautifulSoup(page.content(), 'html.parser')
-            
-            # Scan any tag (div, tr, li) that contains the target date text
-            elements = soup.find_all(lambda tag: tag.name in ['tr', 'div', 'li'] and target_date in tag.get_text())
-            
+            elements = soup.find_all(lambda tag: tag.name in ['tr', 'div', 'li', 'p'] and target_date in tag.get_text())
             for el in elements:
                 row_text = " ".join(el.get_text().split())
                 if target_date in row_text:
@@ -88,11 +111,12 @@ def fetch_data_playwright(page, name, dates):
                                     gain_val = -gain_val
                                 print(f"DEBUG {name}: Parsed XP gain -> {gain_val:,}")
                                 return gain_val
-        except Exception as e:
-            print(f"DEBUG {name}: Error on {profile_url} -> {e}")
-
-    print(f"DEBUG {name}: Could not locate entry for {target_date}")
-    return 0
+                                
+        print(f"DEBUG {name}: Could not locate entry for {target_date}")
+        return 0
+    except Exception as e:
+        print(f"Error scraping {name} via Playwright: {e}")
+        return 0
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
