@@ -51,67 +51,38 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Interactive Search & Link Inspector)
+# 🛠️ THE DATA SCRAPER (Direct Profile URL)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
-    target_date = dates['yesterday_iso']  # e.g., "2026-10-16"
-    print(f"🌐 Searching TibiaStats for {name} targeting date {target_date}...")
+    target_date = dates['yesterday_iso']  # e.g., "2026-10-16[span_1](start_span)"[span_1](end_span)
+    print(f"🌐 Fetching profile directly for {name} targeting date {target_date}...")
+    
+    encoded_name = urllib.parse.quote(name)
+    profile_url = f"https://tibiastats.pl/en/character/{encoded_name}"
     
     try:
-        page.goto("https://tibiastats.pl/en/characters/", wait_until="networkidle", timeout=30000)
-        time.sleep(2)
+        page.goto(profile_url, wait_until="networkidle", timeout=30000)
+        time.sleep(3)
         
-        input_el = page.wait_for_selector("input", timeout=10000)
-        if input_el:
-            input_el.click()
-            input_el.fill(name)
-            time.sleep(3) # Wait for dropdown/autocomplete results
-            
-        soup_search = BeautifulSoup(page.content(), 'html.parser')
-        links = [(a.get('href'), a.get_text().strip()) for a in soup_search.find_all('a', href=True)]
-        print(f"DEBUG {name}: Links after typing name -> {links[:20]}")
+        soup = BeautifulSoup(page.content(), 'html.parser')
         
-        profile_url = None
-        for href, text in links:
-            if name.lower() in text.lower() or name.lower() in href.lower():
-                if href not in ['/en/', '/en/characters/']:
-                    profile_url = href
-                    break
-                    
-        if not profile_url:
-            page.keyboard.press("Enter")
-            time.sleep(3)
-            soup_search = BeautifulSoup(page.content(), 'html.parser')
-            for a in soup_search.find_all('a', href=True):
-                href = a.get('href', '')
-                if href and href not in ['/en/', '/en/characters/']:
-                    profile_url = href
-                    break
-                    
-        if profile_url:
-            if not profile_url.startswith('http'):
-                profile_url = f"https://tibiastats.pl{profile_url}"
-            print(f"DEBUG {name}: Navigating to resolved profile -> {profile_url}")
-            page.goto(profile_url, wait_until="networkidle", timeout=30000)
-            time.sleep(3)
-            
-            soup = BeautifulSoup(page.content(), 'html.parser')
-            elements = soup.find_all(lambda tag: tag.name in ['tr', 'div', 'li', 'p'] and target_date in tag.get_text())
-            for el in elements:
-                row_text = " ".join(el.get_text().split())
-                if target_date in row_text:
-                    print(f"DEBUG {name}: Found target element -> {row_text}")
-                    numbers = re.findall(r"[\d,]{3,}", row_text)
-                    if len(numbers) >= 2:
-                        gain_str = numbers[1].replace(",", "")
-                        if gain_str.isdigit():
-                            gain_val = int(gain_str)
-                            if gain_val < MAX_XP_THRESHOLD:
-                                if "-" in row_text.split(numbers[1])[0][-5:]:
-                                    gain_val = -gain_val
-                                print(f"DEBUG {name}: Parsed XP gain -> {gain_val:,}")
-                                return gain_val
-                                
+        elements = soup.find_all(lambda tag: tag.name in ['tr', 'div', 'li'] and target_date in tag.get_text())
+        
+        for el in elements:
+            row_text = " ".join(el.get_text().split())
+            if target_date in row_text:
+                print(f"DEBUG {name}: Found target element -> {row_text}")
+                numbers = re.findall(r"[\d,]{3,}", row_text)
+                if len(numbers) >= 2:
+                    gain_str = numbers[1].replace(",", "")
+                    if gain_str.isdigit():
+                        gain_val = int(gain_str)
+                        if gain_val < MAX_XP_THRESHOLD:
+                            if "-" in row_text.split(numbers[1])[0][-5:]:
+                                gain_val = -gain_val
+                            print(f"DEBUG {name}: Parsed XP gain -> {gain_val:,}")
+                            return gain_val
+                            
         print(f"DEBUG {name}: Could not locate entry for {target_date}")
         return 0
     except Exception as e:
