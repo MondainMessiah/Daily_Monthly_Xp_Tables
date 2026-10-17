@@ -30,7 +30,7 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (TibiaStats Search & Profile with Debug)
+# 🛠️ THE DATA SCRAPER (TibiaStats Search & Profile Inspector)
 # ==========================================
 def fetch_data(name, dates):
     search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
@@ -49,24 +49,33 @@ def fetch_data(name, dates):
             return 0
         
         soup = BeautifulSoup(r.text, 'html.parser')
-        profile_link = None
-        for a in soup.find_all('a', href=True):
-            if '/character/' in a['href'] and name.lower() in a.get_text().lower():
-                profile_link = a['href']
-                break
         
-        if not profile_link:
-            link = soup.select_one("a[href*='/character/']")
-            if link:
-                profile_link = link['href']
+        # Inspect all links on the search results page
+        all_links = [(a.get('href'), a.get_text().strip()) for a in soup.find_all('a', href=True)]
+        print(f"DEBUG {name}: Sample links found -> {all_links[:10]}")
+        
+        profile_link = None
+        for href, text in all_links:
+            if name.lower() in text.lower() or name.lower() in href.lower():
+                profile_link = href
+                break
                 
+        if not profile_link and all_links:
+            for href, text in all_links:
+                if any(k in href.lower() for k in ['char', 'player', 'stat', 'profile', 'id']):
+                    profile_link = href
+                    break
+                    
         print(f"DEBUG {name}: Resolved profile_link -> {profile_link}")
         if not profile_link:
             return 0
             
         if not profile_link.startswith('http'):
-            profile_link = f"https://tibiastats.pl{profile_link}"
-            
+            if profile_link.startswith('/'):
+                profile_link = f"https://tibiastats.pl{profile_link}"
+            else:
+                profile_link = f"https://tibiastats.pl/en/characters/{profile_link}"
+                
         r_profile = requests.get(profile_link, headers=headers, timeout=30)
         print(f"DEBUG {name}: Profile page status {r_profile.status_code}")
         if r_profile.status_code != 200:
@@ -78,13 +87,10 @@ def fetch_data(name, dates):
         parts = iso_date.split('-')
         alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else "" # e.g., "16-10-2026"
         
-        rows = soup_profile.find_all('tr')
-        print(f"DEBUG {name}: Found {len(rows)} table rows on profile page.")
-        
+        rows = soup_profile.find_all(['tr', 'li', 'div'])
         for row in rows:
             row_text = row.get_text()
             if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
-                print(f"DEBUG {name}: Found matching date row: {row_text.strip()}")
                 match = re.search(r"([+-][\d,.]+)", row_text)
                 if match:
                     raw_val = match.group(1)
