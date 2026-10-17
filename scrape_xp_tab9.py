@@ -33,7 +33,7 @@ KING_GIFS = [
 # 🛠️ THE DATA SCRAPER (TibiaStats Search & Profile)
 # ==========================================
 def fetch_data(name, dates):
-    search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}[span_1](start_span)"[span_1](end_span)
+    search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
