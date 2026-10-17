@@ -30,7 +30,7 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (TibiaStats Search & Profile)
+# 🛠️ THE DATA SCRAPER (TibiaStats Search & Profile with Debug)
 # ==========================================
 def fetch_data(name, dates):
     search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
@@ -44,24 +44,23 @@ def fetch_data(name, dates):
     
     try:
         r = requests.get(search_url, headers=headers, timeout=30)
+        print(f"DEBUG {name}: Search status {r.status_code}")
         if r.status_code != 200: 
             return 0
         
         soup = BeautifulSoup(r.text, 'html.parser')
-        
-        # Find the link corresponding to the character in the search results
         profile_link = None
         for a in soup.find_all('a', href=True):
             if '/character/' in a['href'] and name.lower() in a.get_text().lower():
                 profile_link = a['href']
                 break
         
-        # Fallback to the first character link if exact name match in text isn't found
         if not profile_link:
             link = soup.select_one("a[href*='/character/']")
             if link:
                 profile_link = link['href']
                 
+        print(f"DEBUG {name}: Resolved profile_link -> {profile_link}")
         if not profile_link:
             return 0
             
@@ -69,6 +68,7 @@ def fetch_data(name, dates):
             profile_link = f"https://tibiastats.pl{profile_link}"
             
         r_profile = requests.get(profile_link, headers=headers, timeout=30)
+        print(f"DEBUG {name}: Profile page status {r_profile.status_code}")
         if r_profile.status_code != 200:
             return 0
             
@@ -79,9 +79,12 @@ def fetch_data(name, dates):
         alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else "" # e.g., "16-10-2026"
         
         rows = soup_profile.find_all('tr')
+        print(f"DEBUG {name}: Found {len(rows)} table rows on profile page.")
+        
         for row in rows:
             row_text = row.get_text()
             if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
+                print(f"DEBUG {name}: Found matching date row: {row_text.strip()}")
                 match = re.search(r"([+-][\d,.]+)", row_text)
                 if match:
                     raw_val = match.group(1)
@@ -90,6 +93,7 @@ def fetch_data(name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
+        print(f"DEBUG {name}: Final parsed XP gain -> {xp_gain}")
         return xp_gain
     except Exception as e:
         print(f"Error scraping {name}: {e}")
