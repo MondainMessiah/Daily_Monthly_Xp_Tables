@@ -1,19 +1,14 @@
-name: Tibia XP Tracker
+name: Run Tibia XP Tracker
 
 on:
-  schedule:
-    # 08:25 UTC = 09:25 AM UK (BST)
-    # Shifting back by 1 hour to account for the UK's BST +1 offset
-    # and GitHub's typical morning scheduling delay.
-    - cron: '33 8 * * *'
-  workflow_dispatch: # Allows you to run the bot manually via the "Actions" tab
-
-permissions:
-  contents: write
+  scheduled:
+    - cron: '0 3 * * *' # Runs daily at 3:00 AM (adjust as needed)
+  workflow_dispatch:      # Allows manual trigger from GitHub UI
 
 jobs:
-  scrape:
+  track-xp:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,26 +18,22 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install requests beautifulsoup4
 
-      # We run Version 48 of the script here
-      - name: Run XP Scraper Script
+      - name: Run XP Scraper
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          GOOGLE_BRIDGE_URL: ${{ secrets.GOOGLE_BRIDGE_URL }}
-        run: python scrape_xp_tab9.py
+        run: |
+          python scrape_xp_tab9.py
 
-      - name: Commit and push changes
+      - name: Commit and push changes if any
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Adding all relevant data files to the commit
-          git add xp_log.json post_state.json streaks.json xp_totals.json personal_bests.json
-          
+          git add xp_log.json post_state.json streaks.json personal_bests.json
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "🤖 Auto-update XP logs and streaks [skip ci]"
             git push
