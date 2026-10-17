@@ -33,7 +33,8 @@ KING_GIFS = [
 # 🛠️ THE DATA SCRAPER (TibiaStats Direct)
 # ==========================================
 def fetch_data(name, dates):
-    search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
+    # Try direct character profile URL structure first
+    char_url = f"https://tibiastats.pl/en/character/{urllib.parse.quote(name)}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -43,9 +44,24 @@ def fetch_data(name, dates):
     }
     
     try:
-        r = requests.get(search_url, headers=headers, timeout=30)
-        if r.status_code != 200: 
-            return 0
+        r = requests.get(char_url, headers=headers, timeout=30)
+        
+        # If direct profile URL fails, fallback to search page and grab the first profile link
+        if r.status_code != 200:
+            search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
+            r = requests.get(search_url, headers=headers, timeout=30)
+            if r.status_code != 200: 
+                return 0
+            
+            soup = BeautifulSoup(r.text, 'html.parser')
+            link = soup.select_one("a[href*='/character/']")
+            if link and link.get('href'):
+                profile_link = link['href']
+                if not profile_link.startswith('http'):
+                    profile_link = f"https://tibiastats.pl{profile_link}"
+                r = requests.get(profile_link, headers=headers, timeout=30)
+                if r.status_code != 200: 
+                    return 0
         
         soup = BeautifulSoup(r.text, 'html.parser')
         xp_gain = 0
