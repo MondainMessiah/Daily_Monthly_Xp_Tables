@@ -29,7 +29,7 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (WITH DIAGNOSTICS)
+# 🛠️ THE DATA SCRAPER
 # ==========================================
 def fetch_data(name, dates):
     bridge_url = os.environ.get("GOOGLE_BRIDGE_URL")
@@ -39,9 +39,7 @@ def fetch_data(name, dates):
     final_url = f"{bridge_url}?url={urllib.parse.quote(target_url)}"
     try:
         r = requests.get(final_url, timeout=45)
-        if r.status_code != 200:
-            print(f"⚠️ [{name}] HTTP Status Error: {r.status_code}")
-            return 0
+        if r.status_code != 200: return 0
         
         xp_gain = 0
         iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
@@ -59,14 +57,8 @@ def fetch_data(name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
-                            return xp_gain
-                            
-        # Diagnostic fallback print if zero was found so we see a sample of what the page returned
-        print(f"⚠️ [{name}] Date '{iso_date}' not found in HTML snippet. Snippet preview: {r.text[:150].strip()}")
-        return 0
-    except Exception as e:
-        print(f"❌ [{name}] Request exception: {e}")
-        return 0
+        return xp_gain
+    except: return 0
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
