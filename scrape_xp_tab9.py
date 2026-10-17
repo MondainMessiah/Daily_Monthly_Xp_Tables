@@ -31,7 +31,7 @@ KING_GIFS = [
 ]
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Playwright Strict Link Matcher)
+# 🛠️ THE DATA SCRAPER (Playwright DOM Inspector)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
     search_url = f"https://tibiastats.pl/en/characters/?name={urllib.parse.quote(name)}"
@@ -39,52 +39,31 @@ def fetch_data_playwright(page, name, dates):
     
     try:
         page.goto(search_url, wait_until="networkidle", timeout=45000)
+        time.sleep(3)
         
-        # Wait for table or character links to render dynamically via React
-        try:
-            page.wait_for_selector("a[href*='/character/']", timeout=10000)
-        except Exception:
-            time.sleep(3) # Fallback wait for hydration
-            
+        search_input = page.query_selector("input[type='text'], input[placeholder*='character' i], input[name*='name' i]")
+        if search_input:
+            print(f"DEBUG {name}: Found search input field, typing name...")
+            search_input.fill(name)
+            search_input.press("Enter")
+            time.sleep(3)
+
         html = page.content()
         soup = BeautifulSoup(html, 'html.parser')
         
-        profile_link = None
-        # Strict search: must contain '/character/' in the href
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            text = a.get_text().strip()
-            if '/character/' in href:
-                if name.lower() in text.lower() or name.lower() in href.lower():
-                    profile_link = href
-                    break
-                    
-        # If no exact text match, grab the first valid /character/ link in the table/results
-        if not profile_link:
-            for a in soup.select("table a[href*='/character/'], div[class*='result'] a[href*='/character/']"):
-                href = a.get('href', '')
-                if '/character/' in href:
-                    profile_link = href
-                    break
-
-        if not profile_link:
-            print(f"DEBUG {name}: No valid character profile link found in search results.")
-            return 0
-
-        if not profile_link.startswith('http'):
-            profile_link = f"https://tibiastats.pl{profile_link}"
-            
-        print(f"DEBUG {name}: Navigating to profile -> {profile_link}")
-        page.goto(profile_link, wait_until="networkidle", timeout=45000)
-        time.sleep(2)
+        all_hrefs = [a['href'] for a in soup.find_all('a', href=True)]
+        print(f"DEBUG {name}: All rendered hrefs -> {all_hrefs[:15]}")
         
-        soup_profile = BeautifulSoup(page.content(), 'html.parser')
+        body_text = soup.body.get_text() if soup.body else ""
+        clean_text = " ".join(body_text.split())
+        print(f"DEBUG {name}: Rendered text snippet -> {clean_text[:300]}")
+        
         xp_gain = 0
-        iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
+        iso_date = dates['yesterday_iso']
         parts = iso_date.split('-')
         alt_date_format = f"{parts[2]}-{parts[1]}-{parts[0]}" if len(parts) == 3 else ""
 
-        rows = soup_profile.find_all(['tr', 'div', 'li'])
+        rows = soup.find_all(['tr', 'div', 'li'])
         for row in rows:
             row_text = row.get_text()
             if iso_date in row_text or (alt_date_format and alt_date_format in row_text):
@@ -96,7 +75,7 @@ def fetch_data_playwright(page, name, dates):
                         val = int(digits)
                         if val < MAX_XP_THRESHOLD:
                             xp_gain = -val if '-' in raw_val else val
-                            print(f"DEBUG {name}: Parsed XP gain -> {xp_gain}")
+                            print(f"DEBUG {name}: Direct parsed XP gain -> {xp_gain}")
                             return xp_gain
 
         return xp_gain
