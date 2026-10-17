@@ -51,63 +51,52 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Playwright Dynamic Container Scraper)
+# 🛠️ THE DATA SCRAPER (Matched to Screenshot DOM)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
-    print(f"🌐 Searching TibiaStats UI for {name}...")
-    try:
-        page.goto("https://tibiastats.pl/en/characters/", wait_until="networkidle", timeout=35000)
-        time.sleep(2)
-        
-        search_input = page.wait_for_selector("input", timeout=10000)
-        if search_input:
-            search_input.click()
-            page.keyboard.press("Control+A")
-            page.keyboard.press("Backspace")
-            search_input.fill(name)
-            time.sleep(1)
+    target_date = dates['yesterday_iso']  # e.g., "2026-10-16"
+    print(f"🌐 Fetching profile for {name} targeting date {target_date}...")
+    
+    encoded_name = urllib.parse.quote(name)
+    urls_to_try = [
+        f"https://tibiastats.pl/en/character/{encoded_name}",
+        f"https://tibiastats.pl/en/characters/{encoded_name}"
+    ]
+    
+    for profile_url in urls_to_try:
+        try:
+            page.goto(profile_url, wait_until="networkidle", timeout=30000)
+            time.sleep(3)
             
-            button = page.query_selector("button[type='submit'], button")
-            if button:
-                button.click()
-            else:
-                page.keyboard.press("Enter")
+            try:
+                page.wait_for_selector("tr", timeout=8000)
+            except Exception:
+                continue
+
+            soup = BeautifulSoup(page.content(), 'html.parser')
+            rows = soup.find_all('tr')
+            
+            for row in rows:
+                row_text = " ".join(row.get_text().split())
                 
-            time.sleep(4)
-            page.wait_for_load_state("networkidle")
+                if target_date in row_text:
+                    print(f"DEBUG {name}: Found target row -> {row_text}")
+                    numbers = re.findall(r"[\d,]{3,}", row_text)
+                    if len(numbers) >= 2:
+                        gain_str = numbers[1].replace(",", "")
+                        if gain_str.isdigit():
+                            gain_val = int(gain_str)
+                            if gain_val < MAX_XP_THRESHOLD:
+                                if "-" in row_text.split(numbers[1])[0][-5:]:
+                                    gain_val = -gain_val
+                                print(f"DEBUG {name}: Parsed XP gain -> {gain_val:,}")
+                                return gain_val
 
-        soup = BeautifulSoup(page.content(), 'html.parser')
-        
-        iso_date = dates['yesterday_iso'] # e.g., "2026-10-16"
-        parts = iso_date.split('-')
-        alt_dates = [
-            iso_date,
-            f"{parts[2]}-{parts[1]}-{parts[0]}",
-            f"{parts[2]}.{parts[1]}.{parts[0]}",
-            f"{parts[2]}/{parts[1]}/{parts[0]}",
-            "Yesterday"
-        ]
+        except Exception as e:
+            print(f"DEBUG {name}: Error on {profile_url} -> {e}")
 
-        elements = soup.find_all(['tr', 'div', 'li', 'p'])
-        for el in elements:
-            text = el.get_text().strip()
-            if any(d.lower() in text.lower() for d in alt_dates):
-                match = re.search(r"([+-][\d,.]+)", text)
-                if match:
-                    raw_val = match.group(1)
-                    digits = "".join(c for c in raw_val if c.isdigit())
-                    if digits:
-                        val = int(digits)
-                        if val < MAX_XP_THRESHOLD:
-                            xp_gain = -val if '-' in raw_val else val
-                            print(f"DEBUG {name}: Matched XP for {iso_date} -> {xp_gain} in text: '{text[:80]}'")
-                            return xp_gain
-
-        print(f"DEBUG {name}: No XP entry found for date {iso_date}")
-        return 0
-    except Exception as e:
-        print(f"Error scraping {name} via Playwright: {e}")
-        return 0
+    print(f"DEBUG {name}: Could not locate entry for {target_date}")
+    return 0
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
@@ -264,75 +253,4 @@ def main():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-        page = context.new_page()
-
-        for name in chars:
-            gain = fetch_data_playwright(page, name, dates)
-            current_scrapes[name] = gain
-            if gain != 0: total_non_zero += 1
-            time.sleep(1)
-
-        browser.close()
-
-    if total_non_zero == 0:
-        print(f"🛑 ANTI-ZERO TRIGGERED.")
-        return 
-
-    for name, gain in current_scrapes.items():
-        if name not in logs: logs[name] = {}
-        logs[name][dates['yesterday_iso']] = f"{gain:+,}"
-        if gain > 0 and update_personal_best(name, gain): daily_pb_achievers.append(name)
-    
-    save_json(LOG_PATH, logs)
-
-    daily_ranks = [(name, gain) for name, gain in current_scrapes.items() if gain != 0]
-    daily_ranks.sort(key=lambda x: x[1], reverse=True)
-    top_daily_winner = daily_ranks[0][0] if daily_ranks else ""
-
-    all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
-    reigning_king = all_streaks.get("reigning_king", "")
-    king_died_msg = ""
-    
-    if reigning_king:
-        king_xp = current_scrapes.get(reigning_king, 0)
-        if king_xp <= 0:
-            if king_xp < 0:
-                king_died_msg = f"\n\n💀 **THE KING HAS DIED IN BATTLE!** 💀\n**{reigning_king}** lost `{king_xp:+,} XP` and was stripped of the crown!"
-            else:
-                king_died_msg = f"\n\n👑❌ **THE KING WAS INACTIVE!** 👑❌\n**{reigning_king}** gained `0 XP` and forfeited the crown!"
-            if all_streaks.get("daily", {}).get("last_winner", "").strip().lower() == reigning_king.strip().lower():
-                all_streaks["daily"] = {"last_winner": "", "count": 0}
-            reigning_king = ""
-
-    if not reigning_king and top_daily_winner:
-        all_streaks["reigning_king"] = top_daily_winner
-        if king_died_msg:
-            king_died_msg += f"\n👑 **{top_daily_winner}** has instantly seized the vacant throne as the new King!"
-        else:
-            king_died_msg = f"\n\n👑 **{top_daily_winner}** has claimed the vacant throne!"
-        save_json(STREAKS_PATH, all_streaks)
-    elif king_died_msg:
-        save_json(STREAKS_PATH, all_streaks)
-
-    if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
-        r = get_summed_xp(logs, chars, days=7)
-        if r: send_discord_post("Weekly XP Totals", "🗓️ Period: **Last 7 Days**", r, 0x3498db, dates, "weekly")
-        state["last_weekly"] = dates['yesterday_iso']
-
-    if dates['is_first'] and state.get("last_monthly") != dates['yesterday_iso']:
-        r = get_summed_xp(logs, chars, month_prefix=dates['month_filter'])
-        if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
-        state["last_monthly"] = dates['yesterday_iso']
-
-    if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
-        sub_text = f"🗓️ Date: **{dates['yesterday_display']}**"
-        if king_died_msg:
-            sub_text += king_died_msg
-        send_discord_post("Daily Champion", sub_text, daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers)
-        state["last_daily"] = dates['yesterday_iso']
-
-    save_json(STATE_PATH, state)
-
-if __name__ == "__main__":
-    main()
+        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/53
