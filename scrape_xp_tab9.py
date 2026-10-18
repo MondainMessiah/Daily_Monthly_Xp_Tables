@@ -34,10 +34,8 @@ def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
     
-    if now.hour < 10:
-        target_date = now - timedelta(days=2)
-    else:
-        target_date = now - timedelta(days=1)
+    # Strict yesterday calculation without fallbacks
+    target_date = now - timedelta(days=1)
         
     return {
         "yesterday_iso": target_date.strftime("%Y-%m-%d"),
@@ -49,11 +47,11 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Multi-URL Fallback Scraper)
+# 🛠️ THE DATA SCRAPER (Strict Exact Date Match)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
     target_date = dates['yesterday_iso']  # e.g., "2026-10-17"
-    print(f"🌐 Fetching profile for {name} targeting date {target_date}...")
+    print(f"🌐 Fetching profile for {name} strictly targeting date {target_date}...")
     
     encoded_name = urllib.parse.quote(name)
     urls_to_try = [
@@ -88,40 +86,29 @@ def fetch_data_playwright(page, name, dates):
 
             print(f"DEBUG {name}: Found {len(rows)} <tr> rows using {profile_url}")
             
-            target_row = None
+            # Strict match only
             for row in rows:
                 tds = row.find_all('td')
-                if len(tds) >= 3 and target_date in tds[0].get_text().strip():
-                    target_row = row
-                    break
-                    
-            if not target_row:
-                for row in rows:
-                    tds = row.find_all('td')
-                    if len(tds) >= 3 and re.search(r"\d{4}-\d{2}-\d{2}", tds[0].get_text()):
-                        target_row = row
-                        print(f"DEBUG {name}: Fallback to top table row -> {tds[0].get_text().strip()}")
-                        break
-
-            if target_row:
-                tds = target_row.find_all('td')
-                gain_cell = tds[2]
-                span_el = gain_cell.find('span')
-                gain_text = span_el.get_text().strip() if span_el else gain_cell.get_text().strip()
-                
-                digits = "".join(c for c in gain_text if c.isdigit())
-                if digits:
-                    gain_val = int(digits)
-                    if gain_val < MAX_XP_THRESHOLD:
-                        if '-' in gain_text or 'trending-down' in str(gain_cell):
-                            gain_val = -gain_val
-                        print(f"DEBUG {name}: Successfully parsed XP gain -> {gain_val:,}")
-                        return gain_val
+                if len(tds) >= 3:
+                    row_date = tds[0].get_text().strip()
+                    if target_date in row_date:
+                        gain_cell = tds[2]
+                        span_el = gain_cell.find('span')
+                        gain_text = span_el.get_text().strip() if span_el else gain_cell.get_text().strip()
+                        
+                        digits = "".join(c for c in gain_text if c.isdigit())
+                        if digits:
+                            gain_val = int(digits)
+                            if gain_val < MAX_XP_THRESHOLD:
+                                if '-' in gain_text or 'trending-down' in str(gain_cell):
+                                    gain_val = -gain_val
+                                print(f"DEBUG {name}: Successfully parsed exact match for {target_date} -> {gain_val:,}")
+                                return gain_val
 
         except Exception as e:
             print(f"DEBUG {name}: Error attempting {profile_url} -> {e}")
 
-    print(f"DEBUG {name}: Could not locate valid profile table.")
+    print(f"DEBUG {name}: No entry found for strict target date {target_date}")
     return 0
 
 # ==========================================
@@ -274,7 +261,7 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Starting Playwright scraper for target date {dates['yesterday_iso']}...")
+    print(f"🌐 Starting Playwright scraper for strict target date {dates['yesterday_iso']}...")
     current_scrapes = {}; daily_pb_achievers = []; total_non_zero = 0
 
     with sync_playwright() as p:
