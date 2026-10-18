@@ -34,8 +34,6 @@ def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
     
-    # Tibia server save runs around 09:00-10:00 UTC. 
-    # If running early in the morning before save populates, look back 2 days.
     if now.hour < 10:
         target_date = now - timedelta(days=2)
     else:
@@ -51,10 +49,10 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Exact DOM Parser)
+# 🛠️ THE DATA SCRAPER (Exact DOM + Fallback Parser)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
-    target_date = dates['yesterday_iso']  # e.g., "2026-10-16"
+    target_date = dates['yesterday_iso']  # e.g., "2026-10-17"
     print(f"🌐 Fetching profile directly for {name} targeting date {target_date}...")
     
     encoded_name = urllib.parse.quote(name)
@@ -73,24 +71,38 @@ def fetch_data_playwright(page, name, dates):
             pass
 
         soup = BeautifulSoup(page.content(), 'html.parser')
-        
         rows = soup.find_all('tr')
+        
+        target_row = None
         for row in rows:
             tds = row.find_all('td')
             if len(tds) >= 3:
                 date_text = tds[0].get_text().strip()
-                if target_date == date_text or target_date in date_text:
-                    gain_text = tds[2].get_text().strip()
-                    digits = "".join(c for c in gain_text if c.isdigit())
-                    if digits:
-                        gain_val = int(digits)
-                        if gain_val < MAX_XP_THRESHOLD:
-                            if '-' in gain_text or 'trending-down' in str(tds[2]):
-                                gain_val = -gain_val
-                            print(f"DEBUG {name}: Parsed XP gain -> {gain_val:,}")
-                            return gain_val
+                if target_date in date_text:
+                    target_row = row
+                    break
+        
+        if not target_row:
+            for row in rows:
+                tds = row.find_all('td')
+                if len(tds) >= 3 and re.match(r"\d{4}-\d{2}-\d{2}", tds[0].get_text().strip()):
+                    target_row = row
+                    print(f"DEBUG {name}: Exact date {target_date} not found, falling back to latest available row -> {tds[0].get_text().strip()}")
+                    break
 
-        print(f"DEBUG {name}: Could not locate entry for {target_date}")
+        if target_row:
+            tds = target_row.find_all('td')
+            gain_text = tds[2].get_text().strip()
+            digits = "".join(c for c in gain_text if c.isdigit())
+            if digits:
+                gain_val = int(digits)
+                if gain_val < MAX_XP_THRESHOLD:
+                    if '-' in gain_text or 'trending-down' in str(tds[2]):
+                        gain_val = -gain_val
+                    print(f"DEBUG {name}: Parsed XP gain -> {gain_val:,}")
+                    return gain_val
+
+        print(f"DEBUG {name}: Could not locate any valid XP entry.")
         return 0
     except Exception as e:
         print(f"Error scraping {name} via Playwright: {e}")
