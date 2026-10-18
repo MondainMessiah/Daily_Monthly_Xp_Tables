@@ -51,10 +51,10 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Direct Profile URL)
+# 🛠️ THE DATA SCRAPER (Exact DOM Parser)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
-    target_date = dates['yesterday_iso']  # e.g., "2026-10-16[span_1](start_span)"[span_1](end_span)
+    target_date = dates['yesterday_iso']  # e.g., "2026-10-16"
     print(f"🌐 Fetching profile directly for {name} targeting date {target_date}...")
     
     encoded_name = urllib.parse.quote(name)
@@ -62,27 +62,34 @@ def fetch_data_playwright(page, name, dates):
     
     try:
         page.goto(profile_url, wait_until="networkidle", timeout=30000)
-        time.sleep(3)
+        time.sleep(2)
         
+        try:
+            exp_tab = page.wait_for_selector("button:has-text('Experience')", timeout=5000)
+            if exp_tab:
+                exp_tab.click()
+                time.sleep(2)
+        except Exception:
+            pass
+
         soup = BeautifulSoup(page.content(), 'html.parser')
         
-        elements = soup.find_all(lambda tag: tag.name in ['tr', 'div', 'li'] and target_date in tag.get_text())
-        
-        for el in elements:
-            row_text = " ".join(el.get_text().split())
-            if target_date in row_text:
-                print(f"DEBUG {name}: Found target element -> {row_text}")
-                numbers = re.findall(r"[\d,]{3,}", row_text)
-                if len(numbers) >= 2:
-                    gain_str = numbers[1].replace(",", "")
-                    if gain_str.isdigit():
-                        gain_val = int(gain_str)
+        rows = soup.find_all('tr')
+        for row in rows:
+            tds = row.find_all('td')
+            if len(tds) >= 3:
+                date_text = tds[0].get_text().strip()
+                if target_date == date_text or target_date in date_text:
+                    gain_text = tds[2].get_text().strip()
+                    digits = "".join(c for c in gain_text if c.isdigit())
+                    if digits:
+                        gain_val = int(digits)
                         if gain_val < MAX_XP_THRESHOLD:
-                            if "-" in row_text.split(numbers[1])[0][-5:]:
+                            if '-' in gain_text or 'trending-down' in str(tds[2]):
                                 gain_val = -gain_val
                             print(f"DEBUG {name}: Parsed XP gain -> {gain_val:,}")
                             return gain_val
-                            
+
         print(f"DEBUG {name}: Could not locate entry for {target_date}")
         return 0
     except Exception as e:
