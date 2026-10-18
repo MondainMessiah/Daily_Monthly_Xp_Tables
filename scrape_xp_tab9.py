@@ -49,67 +49,80 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Hydration Wait Parser)
+# 🛠️ THE DATA SCRAPER (Multi-URL Fallback Scraper)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
     target_date = dates['yesterday_iso']  # e.g., "2026-10-17"
-    print(f"🌐 Fetching profile directly for {name} targeting date {target_date}...")
+    print(f"🌐 Fetching profile for {name} targeting date {target_date}...")
     
     encoded_name = urllib.parse.quote(name)
-    profile_url = f"https://tibiastats.pl/en/character/{encoded_name}"
+    urls_to_try = [
+        f"https://tibiastats.pl/en/characters/?name={encoded_name}",
+        f"https://tibiastats.pl/en/character/{encoded_name}",
+        f"https://tibiastats.pl/en/characters/{encoded_name}"
+    ]
     
-    try:
-        page.goto(profile_url, wait_until="networkidle", timeout=30000)
-        time.sleep(2)
-        
+    for profile_url in urls_to_try:
         try:
-            exp_tab = page.wait_for_selector("button:has-text('Experience')", timeout=5000)
-            if exp_tab:
-                exp_tab.click()
-                page.wait_for_selector("tr", timeout=10000)
-        except Exception as e:
-            print(f"DEBUG {name}: Tab click or row wait note -> {e}")
+            page.goto(profile_url, wait_until="networkidle", timeout=25000)
+            time.sleep(2)
+            
+            try:
+                exp_btn = page.query_selector("button:has-text('Experience')")
+                if exp_btn:
+                    exp_btn.click()
+                    time.sleep(2)
+            except Exception:
+                pass
 
-        soup = BeautifulSoup(page.content(), 'html.parser')
-        rows = soup.find_all('tr')
-        print(f"DEBUG {name}: Found {len(rows)} rows after hydration.")
-        
-        target_row = None
-        
-        for row in rows:
-            tds = row.find_all('td')
-            if len(tds) >= 3 and target_date in tds[0].get_text().strip():
-                target_row = row
-                break
-                
-        if not target_row:
+            try:
+                page.wait_for_selector("tr", timeout=5000)
+            except Exception:
+                continue
+
+            soup = BeautifulSoup(page.content(), 'html.parser')
+            rows = soup.find_all('tr')
+            
+            if not rows:
+                continue
+
+            print(f"DEBUG {name}: Found {len(rows)} <tr> rows using {profile_url}")
+            
+            target_row = None
             for row in rows:
                 tds = row.find_all('td')
-                if len(tds) >= 3 and re.search(r"\d{4}-\d{2}-\d{2}", tds[0].get_text()):
+                if len(tds) >= 3 and target_date in tds[0].get_text().strip():
                     target_row = row
-                    print(f"DEBUG {name}: Fallback to latest available row -> {tds[0].get_text().strip()}")
                     break
+                    
+            if not target_row:
+                for row in rows:
+                    tds = row.find_all('td')
+                    if len(tds) >= 3 and re.search(r"\d{4}-\d{2}-\d{2}", tds[0].get_text()):
+                        target_row = row
+                        print(f"DEBUG {name}: Fallback to top table row -> {tds[0].get_text().strip()}")
+                        break
 
-        if target_row:
-            tds = target_row.find_all('td')
-            gain_cell = tds[2]
-            span_el = gain_cell.find('span')
-            gain_text = span_el.get_text().strip() if span_el else gain_cell.get_text().strip()
-            
-            digits = "".join(c for c in gain_text if c.isdigit())
-            if digits:
-                gain_val = int(digits)
-                if gain_val < MAX_XP_THRESHOLD:
-                    if '-' in gain_text or 'trending-down' in str(gain_cell):
-                        gain_val = -gain_val
-                    print(f"DEBUG {name}: Successfully parsed XP gain -> {gain_val:,}")
-                    return gain_val
+            if target_row:
+                tds = target_row.find_all('td')
+                gain_cell = tds[2]
+                span_el = gain_cell.find('span')
+                gain_text = span_el.get_text().strip() if span_el else gain_cell.get_text().strip()
+                
+                digits = "".join(c for c in gain_text if c.isdigit())
+                if digits:
+                    gain_val = int(digits)
+                    if gain_val < MAX_XP_THRESHOLD:
+                        if '-' in gain_text or 'trending-down' in str(gain_cell):
+                            gain_val = -gain_val
+                        print(f"DEBUG {name}: Successfully parsed XP gain -> {gain_val:,}")
+                        return gain_val
 
-        print(f"DEBUG {name}: Could not locate any XP entry.")
-        return 0
-    except Exception as e:
-        print(f"Error scraping {name} via Playwright: {e}")
-        return 0
+        except Exception as e:
+            print(f"DEBUG {name}: Error attempting {profile_url} -> {e}")
+
+    print(f"DEBUG {name}: Could not locate valid profile table.")
+    return 0
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
