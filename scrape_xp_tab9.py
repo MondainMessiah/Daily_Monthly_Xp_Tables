@@ -49,7 +49,7 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Explicit Fallback Parser)
+# 🛠️ THE DATA SCRAPER (Hydration Wait Parser)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
     target_date = dates['yesterday_iso']  # e.g., "2026-10-17"
@@ -66,12 +66,13 @@ def fetch_data_playwright(page, name, dates):
             exp_tab = page.wait_for_selector("button:has-text('Experience')", timeout=5000)
             if exp_tab:
                 exp_tab.click()
-                time.sleep(2)
-        except Exception:
-            pass
+                page.wait_for_selector("tr", timeout=10000)
+        except Exception as e:
+            print(f"DEBUG {name}: Tab click or row wait note -> {e}")
 
         soup = BeautifulSoup(page.content(), 'html.parser')
         rows = soup.find_all('tr')
+        print(f"DEBUG {name}: Found {len(rows)} rows after hydration.")
         
         target_row = None
         
@@ -86,7 +87,7 @@ def fetch_data_playwright(page, name, dates):
                 tds = row.find_all('td')
                 if len(tds) >= 3 and re.search(r"\d{4}-\d{2}-\d{2}", tds[0].get_text()):
                     target_row = row
-                    print(f"DEBUG {name}: Exact date {target_date} not in table. Fallback to latest entry -> {tds[0].get_text().strip()}")
+                    print(f"DEBUG {name}: Fallback to latest available row -> {tds[0].get_text().strip()}")
                     break
 
         if target_row:
