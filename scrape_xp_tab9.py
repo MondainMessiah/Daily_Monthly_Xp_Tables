@@ -49,10 +49,10 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Exact DOM + Fallback Parser)
+# 🛠️ THE DATA SCRAPER (Explicit Span Parser)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
-    target_date = dates['yesterday_iso']  # e.g., "2026-10-17"
+    target_date = dates['yesterday_iso']  # e.g., "2026-10-16"
     print(f"🌐 Fetching profile directly for {name} targeting date {target_date}...")
     
     encoded_name = urllib.parse.quote(name)
@@ -73,36 +73,26 @@ def fetch_data_playwright(page, name, dates):
         soup = BeautifulSoup(page.content(), 'html.parser')
         rows = soup.find_all('tr')
         
-        target_row = None
         for row in rows:
             tds = row.find_all('td')
             if len(tds) >= 3:
-                date_text = tds[0].get_text().strip()
-                if target_date in date_text:
-                    target_row = row
-                    break
-        
-        if not target_row:
-            for row in rows:
-                tds = row.find_all('td')
-                if len(tds) >= 3 and re.match(r"\d{4}-\d{2}-\d{2}", tds[0].get_text().strip()):
-                    target_row = row
-                    print(f"DEBUG {name}: Exact date {target_date} not found, falling back to latest available row -> {tds[0].get_text().strip()}")
-                    break
+                row_date = tds[0].get_text().strip()
+                
+                if target_date in row_date or (target_date not in page.content() and re.match(r"\d{4}-\d{2}-\d{2}", row_date)):
+                    gain_cell = tds[2]
+                    span_el = gain_cell.find('span')
+                    gain_text = span_el.get_text().strip() if span_el else gain_cell.get_text().strip()
+                    
+                    digits = "".join(c for c in gain_text if c.isdigit())
+                    if digits:
+                        gain_val = int(digits)
+                        if gain_val < MAX_XP_THRESHOLD:
+                            if '-' in gain_text or 'trending-down' in str(gain_cell):
+                                gain_val = -gain_val
+                            print(f"DEBUG {name}: Matched row date '{row_date}' -> Parsed XP gain {gain_val:,}")
+                            return gain_val
 
-        if target_row:
-            tds = target_row.find_all('td')
-            gain_text = tds[2].get_text().strip()
-            digits = "".join(c for c in gain_text if c.isdigit())
-            if digits:
-                gain_val = int(digits)
-                if gain_val < MAX_XP_THRESHOLD:
-                    if '-' in gain_text or 'trending-down' in str(tds[2]):
-                        gain_val = -gain_val
-                    print(f"DEBUG {name}: Parsed XP gain -> {gain_val:,}")
-                    return gain_val
-
-        print(f"DEBUG {name}: Could not locate any valid XP entry.")
+        print(f"DEBUG {name}: Could not locate XP entry.")
         return 0
     except Exception as e:
         print(f"Error scraping {name} via Playwright: {e}")
