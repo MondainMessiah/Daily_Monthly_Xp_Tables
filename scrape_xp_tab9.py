@@ -34,7 +34,6 @@ def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
     
-    # Strict yesterday calculation without fallbacks
     target_date = now - timedelta(days=1)
         
     return {
@@ -47,10 +46,10 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Strict Exact Date Match)
+# 🛠️ THE DATA SCRAPER (Wait for Live Data Hydration)
 # ==========================================
 def fetch_data_playwright(page, name, dates):
-    target_date = dates['yesterday_iso']  # e.g., "2026-10-17"
+    target_date = dates['yesterday_iso']  # e.g., "2026-10-21"
     print(f"🌐 Fetching profile for {name} strictly targeting date {target_date}...")
     
     encoded_name = urllib.parse.quote(name)
@@ -69,12 +68,18 @@ def fetch_data_playwright(page, name, dates):
                 exp_btn = page.query_selector("button:has-text('Experience')")
                 if exp_btn:
                     exp_btn.click()
-                    time.sleep(2)
             except Exception:
                 pass
 
+            # Wait for "Loading the history..." to vanish
             try:
-                page.wait_for_selector("tr", timeout=5000)
+                page.wait_for_selector("text=Loading the history...", state="detached", timeout=12000)
+            except Exception:
+                pass
+
+            # Wait for table rows to appear
+            try:
+                page.wait_for_selector("tr", timeout=8000)
             except Exception:
                 continue
 
@@ -84,9 +89,8 @@ def fetch_data_playwright(page, name, dates):
             if not rows:
                 continue
 
-            print(f"DEBUG {name}: Found {len(rows)} <tr> rows using {profile_url}")
+            print(f"DEBUG {name}: Hydrated {len(rows)} <tr> rows using {profile_url}")
             
-            # Strict match only
             for row in rows:
                 tds = row.find_all('td')
                 if len(tds) >= 3:
