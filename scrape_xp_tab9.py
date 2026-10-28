@@ -1,7 +1,7 @@
 import os
 import json
-import requests
 from bs4 import BeautifulSoup
+from curl_cffi import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -17,7 +17,7 @@ TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
 WORLD_NAME = "Celesta"
 
-# Direct highscores lookup links for exact character pages
+# Direct highscores lookup links for exact character pages provided by user
 CHARACTER_URLS = {
     "Ilumine": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=2&currentpage=5",
     "Jay The Pally": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=3&currentpage=2",
@@ -41,15 +41,13 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ ROBUST NAME-ANCHORED HIGHSCORES SCRAPER
+# 🛠️ CURL_CFFI HIGHSCORES SCRAPER
 # ==========================================
 def fetch_official_tibia_highscores(target_names):
     """
-    Scrapes official Tibia.com highscores pages by searching for the character's 
-    exact name in the page cells and extracting the experience points.
+    Scrapes official Tibia.com highscores using curl_cffi to bypass Cloudflare/bot blocks.
     """
     found_chars = {}
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
     urls_to_visit = set()
     for name in target_names:
@@ -60,24 +58,22 @@ def fetch_official_tibia_highscores(target_names):
 
     for url in urls_to_visit:
         try:
-            response = requests.get(url, headers=headers, timeout=15)
+            # impersonate="chrome110" bypasses Cloudflare checks on Tibia.com
+            response = requests.get(url, impersonate="chrome110", timeout=20)
             if response.status_code != 200:
+                print(f"⚠️ Status code {response.status_code} for URL: {url}")
                 continue
                 
             soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Find all table rows across the page
             rows = soup.find_all('tr')
+            
             for row in rows:
                 row_text = row.get_text()
-                # Check if any of our target names are in this specific row
                 for name in target_names:
                     if name.lower() in row_text.lower():
-                        # Extract all numbers/cells from this row to find the large experience points value
                         cols = row.find_all('td')
                         for col in cols:
                             clean_val = col.get_text().strip().replace(',', '')
-                            # Experience points are large integers (greater than 1,000)
                             if clean_val.isdigit() and int(clean_val) > 1000:
                                 found_chars[name] = int(clean_val)
                                 print(f"DEBUG {name}: Found total XP -> {int(clean_val):,}")
@@ -203,7 +199,7 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
 
     main_embed = {
         "title": f"🏆 {title} 🏆",
-        "description": full_desc,
+        "description": full_dest if 'full_dest' in locals() else full_desc,
         "fields": fields,
         "color": color,
         "footer": {"text": footer_text}
@@ -242,7 +238,7 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching official Tibia.com highscores via name-matched extraction for {len(chars)} characters on {WORLD_NAME}...")
+    print(f"🌐 Fetching official Tibia.com highscores via curl_cffi for {len(chars)} characters on {WORLD_NAME}...")
     current_totals = fetch_official_tibia_highscores(chars)
     
     current_scrapes = {}
