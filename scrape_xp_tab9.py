@@ -22,7 +22,8 @@ CHARACTER_URLS = {
     "Ilumine": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=2&currentpage=5",
     "Jay The Pally": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=3&currentpage=2",
     "Kamikadzei": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=3&currentpage=3",
-    "Hex Good": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=5&currentpage=2"
+    "Hex Good": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=5&currentpage=2",
+    "Zanron The Monk": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=1&currentpage=1"
 }
 
 def get_dates():
@@ -49,13 +50,11 @@ def fetch_official_tibia_highscores(target_names):
     found_chars = {}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    # Track which URLs we need to visit to avoid redundant requests
     urls_to_visit = set()
     for name in target_names:
         if name in CHARACTER_URLS:
             urls_to_visit.add(CHARACTER_URLS[name])
         else:
-            # Fallback general highscores search if a new character is added without a custom link
             urls_to_visit.add(f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&beprotection=-1&category=6&profession=0&currentpage=1")
 
     for url in urls_to_visit:
@@ -65,8 +64,19 @@ def fetch_official_tibia_highscores(target_names):
                 continue
                 
             soup = BeautifulSoup(response.text, 'html.parser')
-            rows = soup.find_all('tr')
             
+            # Find the specific highscores data table (Table3 or any table containing Points/Name)
+            table = soup.find('table', {'class': 'Table3'})
+            if not table:
+                tables = soup.find_all('table')
+                for t in tables:
+                    if 'Points' in t.text and 'Name' in t.text:
+                        table = t
+                        break
+            if not table:
+                continue
+
+            rows = table.find_all('tr')
             for row in rows:
                 cols = row.find_all('td')
                 if len(cols) >= 5:
