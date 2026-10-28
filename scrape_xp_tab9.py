@@ -41,11 +41,12 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ DIRECT URL HIGHSCORES SCRAPER
+# 🛠️ ROBUST NAME-ANCHORED HIGHSCORES SCRAPER
 # ==========================================
 def fetch_official_tibia_highscores(target_names):
     """
-    Scrapes exact official Tibia.com highscores pages configured per character.
+    Scrapes official Tibia.com highscores pages by searching for the character's 
+    exact name in the page cells and extracting the experience points.
     """
     found_chars = {}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -65,29 +66,23 @@ def fetch_official_tibia_highscores(target_names):
                 
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Find the specific highscores data table (Table3 or any table containing Points/Name)
-            table = soup.find('table', {'class': 'Table3'})
-            if not table:
-                tables = soup.find_all('table')
-                for t in tables:
-                    if 'Points' in t.text and 'Name' in t.text:
-                        table = t
-                        break
-            if not table:
-                continue
-
-            rows = table.find_all('tr')
+            # Find all table rows across the page
+            rows = soup.find_all('tr')
             for row in rows:
-                cols = row.find_all('td')
-                if len(cols) >= 5:
-                    name_anchor = cols[1].find('a')
-                    if name_anchor:
-                        char_name = name_anchor.get_text().strip()
-                        xp_text = cols[4].get_text().strip().replace(',', '')
-                        if char_name in target_names and xp_text.isdigit():
-                            found_chars[char_name] = int(xp_text)
-                            print(f"DEBUG {char_name}: Found total XP -> {int(xp_text):,}")
-                            
+                row_text = row.get_text()
+                # Check if any of our target names are in this specific row
+                for name in target_names:
+                    if name.lower() in row_text.lower():
+                        # Extract all numbers/cells from this row to find the large experience points value
+                        cols = row.find_all('td')
+                        for col in cols:
+                            clean_val = col.get_text().strip().replace(',', '')
+                            # Experience points are large integers (greater than 1,000)
+                            if clean_val.isdigit() and int(clean_val) > 1000:
+                                found_chars[name] = int(clean_val)
+                                print(f"DEBUG {name}: Found total XP -> {int(clean_val):,}")
+                                break
+                                
         except Exception as e:
             print(f"Error scraping URL {url}: {e}")
             
@@ -247,7 +242,7 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching official Tibia.com highscores via direct links for {len(chars)} characters on {WORLD_NAME}...")
+    print(f"🌐 Fetching official Tibia.com highscores via name-matched extraction for {len(chars)} characters on {WORLD_NAME}...")
     current_totals = fetch_official_tibia_highscores(chars)
     
     current_scrapes = {}
