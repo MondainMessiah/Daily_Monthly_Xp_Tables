@@ -16,7 +16,7 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 PB_PATH = BASE_DIR / "personal_bests.json"
 TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
-WORLD_NAME = "Celesta"  # Configured for Celesta
+WORLD_NAME = "Celesta"
 
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
@@ -33,58 +33,64 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ OFFICIAL TIBIA.COM HIGHSCORES SCRAPER
+# 🛠️ MULTI-VOCATION TIBIA.COM HIGHSCORES SCRAPER
 # ==========================================
 def fetch_tibia_com_highscores(target_names):
     """
-    Scrapes official Tibia.com highscores for experience points.
-    Returns a dictionary of {character_name: total_experience_int}
+    Scrapes official Tibia.com highscores across all vocations for Celesta 
+    to capture exact experience points.
     """
     found_chars = {}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    page_num = 1
-    max_pages = 10  # Safe upper limit to cover top ranks
+    # Vocations: 0 = All, 1 = Knights, 2 = Paladins, 3 = Sorcerers, 4 = Druids
+    professions = [0, 1, 2, 3, 4]
     
-    while page_num <= max_pages and len(found_chars) < len(target_names):
-        url = f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&category=0&profession=0&currentpage={page_num}"
-        try:
-            response = requests.get(url, headers=headers, timeout=15)
-            if response.status_code != 200:
-                break
-                
-            soup = BeautifulSoup(response.text, 'html.parser')
-            table = soup.find('table', {'class': 'Table3'})
-            if not table:
-                tables = soup.find_all('table')
-                for t in tables:
-                    if 'Points' in t.text and 'Name' in t.text:
-                        table = t
-                        break
-            if not table:
-                break
-
-            rows = table.find_all('tr')
-            row_count = 0
-            for row in rows:
-                cols = row.find_all('td')
-                if len(cols) >= 5:
-                    name_anchor = cols[1].find('a')
-                    if name_anchor:
-                        char_name = name_anchor.get_text().strip()
-                        xp_text = cols[4].get_text().strip().replace(',', '')
-                        if char_name in target_names and xp_text.isdigit():
-                            found_chars[char_name] = int(xp_text)
-                            row_count += 1
-                            
-            if row_count == 0 and page_num > 1:
-                break
-                
-            page_num += 1
-        except Exception as e:
-            print(f"Error fetching Tibia.com highscores page {page_num}: {e}")
+    for prof in professions:
+        if len(found_chars) >= len(target_names):
             break
             
+        page_num = 1
+        # Scan top pages per vocation category to find our tracked characters
+        while page_num <= 5:
+            url = f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&category=0&profession={prof}&currentpage={page_num}"
+            try:
+                response = requests.get(url, headers=headers, timeout=15)
+                if response.status_code != 200:
+                    break
+                    
+                soup = BeautifulSoup(response.text, 'html.parser')
+                table = soup.find('table', {'class': 'Table3'})
+                if not table:
+                    tables = soup.find_all('table')
+                    for t in tables:
+                        if 'Points' in t.text and 'Name' in t.text:
+                            table = t
+                            break
+                if not table:
+                    break
+
+                rows = table.find_all('tr')
+                row_count = 0
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) >= 5:
+                        name_anchor = cols[1].find('a')
+                        if name_anchor:
+                            char_name = name_anchor.get_text().strip()
+                            xp_text = cols[4].get_text().strip().replace(',', '')
+                            if char_name in target_names and xp_text.isdigit():
+                                found_chars[char_name] = int(xp_text)
+                                row_count += 1
+                                
+                if row_count == 0 and page_num > 1:
+                    break
+                    
+                page_num += 1
+            except Exception as e:
+                print(f"Error fetching highscores profession {prof} page {page_num}: {e}")
+                break
+                
     return found_chars
 
 # ==========================================
@@ -254,7 +260,7 @@ def main():
     for name in chars:
         current_xp = current_totals.get(name)
         if current_xp is None:
-            print(f"⚠️ {name}: Not found in Tibia.com highscores (may be unranked).")
+            print(f"⚠️ {name}: Not found in Tibia.com highscores.")
             current_scrapes[name] = 0
             continue
             
