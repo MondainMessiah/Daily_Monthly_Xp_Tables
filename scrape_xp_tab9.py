@@ -41,46 +41,50 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ PLAYWRIGHT HEADLESS BROWSER SCRAPER
+# 🛠️ PLAYWRIGHT SEQUENTIAL & CLOUDFLARE-SAFE SCRAPER
 # ==========================================
 async def fetch_via_playwright(target_names):
     found_chars = {}
-    urls_to_visit = set()
-    for name in target_names:
-        if name in CHARACTER_URLS:
-            urls_to_visit.add(CHARACTER_URLS[name])
-        else:
-            urls_to_visit.add(f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&beprotection=-1&category=6&profession=0&currentpage=1")
-
+    
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800}
         )
         page = await context.new_page()
 
-        for url in urls_to_visit:
+        for name in target_names:
+            url = CHARACTER_URLS.get(name)
+            if not url:
+                continue
+                
             try:
-                print(f"🌐 Navigating to URL via Playwright: {url}")
-                await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                print(f"🌐 Fetching {name} via Playwright -> {url}")
+                await page.goto(url, timeout=40000, wait_until="domcontentloaded")
+                
+                # Allow 2 seconds for Cloudflare JS challenge / table rendering to complete
+                await page.wait_for_timeout(2500)
+                
                 content = await page.content()
-                
                 soup = BeautifulSoup(content, 'html.parser')
-                rows = soup.find_all('tr')
                 
+                rows = soup.find_all('tr')
                 for row in rows:
                     row_text = row.get_text()
-                    for name in target_names:
-                        if name.lower() in row_text.lower():
-                            cols = row.find_all('td')
-                            for col in cols:
-                                clean_val = col.get_text().strip().replace(',', '')
-                                if clean_val.isdigit() and int(clean_val) > 1000:
-                                    found_chars[name] = int(clean_val)
-                                    print(f"DEBUG {name}: Found total XP -> {int(clean_val):,}")
-                                    break
+                    if name.lower() in row_text.lower():
+                        cols = row.find_all('td')
+                        for col in cols:
+                            clean_val = col.get_text().strip().replace(',', '')
+                            if clean_val.isdigit() and int(clean_val) > 1000:
+                                found_chars[name] = int(clean_val)
+                                print(f"DEBUG {name}: Found total XP -> {int(clean_val):,}")
+                                break
+                    if name in found_chars:
+                        break
+                        
             except Exception as e:
-                print(f"Playwright error visiting {url}: {e}")
+                print(f"Playwright error fetching {name}: {e}")
                 
         await browser.close()
     return found_chars
@@ -239,7 +243,7 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching official Tibia.com highscores via Playwright for {len(chars)} characters on {WORLD_NAME}...")
+    print(f"🌐 Fetching official Tibia.com highscores sequentially via Playwright for {len(chars)} characters...")
     current_totals = asyncio.run(fetch_via_playwright(chars))
     
     current_scrapes = {}
