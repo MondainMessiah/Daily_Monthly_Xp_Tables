@@ -41,17 +41,34 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ PLAYWRIGHT SEQUENTIAL & CLOUDFLARE-SAFE SCRAPER
+# 🛠️ CLOUDFLARE-BYPASS PLAYWRIGHT SCRAPER
 # ==========================================
 async def fetch_via_playwright(target_names):
     found_chars = {}
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800}
+        # Launch with anti-detection flags to bypass Cloudflare
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-infobars",
+                "--window-size=1280,800",
+            ]
         )
+        
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            locale="en-US",
+            timezone_id="Europe/London"
+        )
+        
+        # Mask automation flags so Cloudflare doesn't flag the browser
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
         page = await context.new_page()
 
         for name in target_names:
@@ -61,11 +78,10 @@ async def fetch_via_playwright(target_names):
                 
             try:
                 print(f"🌐 Fetching {name} via Playwright -> {url}")
-                # Explicitly await navigation so the script actually waits for the page
                 await page.goto(url, timeout=45000, wait_until="domcontentloaded")
                 
-                # Wait 3 seconds for Cloudflare challenge check / table DOM rendering
-                await page.wait_for_timeout(3000)
+                # Wait 4 seconds for Cloudflare JS challenge / table rendering to complete
+                await page.wait_for_timeout(4000)
                 
                 content = await page.content()
                 soup = BeautifulSoup(content, 'html.parser')
