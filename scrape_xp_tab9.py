@@ -17,15 +17,6 @@ TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
 WORLD_NAME = "Celesta"
 
-# Direct highscores lookup links for exact character pages provided by user
-CHARACTER_URLS = {
-    "Ilumine": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=2&currentpage=5",
-    "Jay The Pally": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=3&currentpage=2",
-    "Kamikadzei": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=3&currentpage=3",
-    "Hex Good": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=5&currentpage=2",
-    "Zanron The Monk": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=1&currentpage=1"
-}
-
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
@@ -41,46 +32,54 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ CURL_CFFI HIGHSCORES SCRAPER
+# 🛠️ DIRECT PROFILE CURL_CFFI SCRAPER
 # ==========================================
-def fetch_official_tibia_highscores(target_names):
+def fetch_tibia_profiles(target_names):
     """
-    Scrapes official Tibia.com highscores using curl_cffi to bypass Cloudflare/bot blocks.
+    Scrapes official Tibia.com individual character profile pages directly 
+    using curl_cffi to bypass Cloudflare 403 blocks on highscore tables.
     """
     found_chars = {}
+    session = requests.Session()
     
-    urls_to_visit = set()
     for name in target_names:
-        if name in CHARACTER_URLS:
-            urls_to_visit.add(CHARACTER_URLS[name])
-        else:
-            urls_to_visit.add(f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&beprotection=-1&category=6&profession=0&currentpage=1")
-
-    for url in urls_to_visit:
+        encoded_name = name.replace(" ", "+")
+        url = f"https://www.tibia.com/community/?subtopic=characters&name={encoded_name}"
+        
         try:
-            # impersonate="chrome110" bypasses Cloudflare checks on Tibia.com
-            response = requests.get(url, impersonate="chrome110", timeout=20)
+            # impersonate="chrome110" handles Cloudflare TLS fingerprinting
+            response = session.get(url, impersonate="chrome110", timeout=20)
             if response.status_code != 200:
-                print(f"⚠️ Status code {response.status_code} for URL: {url}")
+                print(f"⚠️ {name}: Status code {response.status_code}")
                 continue
                 
             soup = BeautifulSoup(response.text, 'html.parser')
-            rows = soup.find_all('tr')
+            page_text = soup.get_text()
             
-            for row in rows:
-                row_text = row.get_text()
-                for name in target_names:
-                    if name.lower() in row_text.lower():
-                        cols = row.find_all('td')
-                        for col in cols:
-                            clean_val = col.get_text().strip().replace(',', '')
-                            if clean_val.isdigit() and int(clean_val) > 1000:
-                                found_chars[name] = int(clean_val)
-                                print(f"DEBUG {name}: Found total XP -> {int(clean_val):,}")
-                                break
-                                
+            if "Character Does Not Exist" in page_text:
+                print(f"⚠️ {name}: Character does not exist.")
+                continue
+                
+            if WORLD_NAME.lower() not in page_text.lower():
+                print(f"⚠️ {name}: Not found on world {WORLD_NAME}.")
+                continue
+
+            # Look through table rows for Experience points
+            for tr in soup.find_all('tr'):
+                text = tr.get_text()
+                if "Experience" in text:
+                    tds = tr.find_all('td')
+                    for td in tds:
+                        td_text = td.get_text().strip().replace(',', '')
+                        if td_text.isdigit() and int(td_text) > 1000:
+                            found_chars[name] = int(td_text)
+                            print(f"DEBUG {name}: Fetched total XP -> {int(td_text):,}")
+                            break
+                    if name in found_chars:
+                        break
+                        
         except Exception as e:
-            print(f"Error scraping URL {url}: {e}")
+            print(f"Error fetching profile for {name}: {e}")
             
     return found_chars
 
@@ -199,7 +198,7 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
 
     main_embed = {
         "title": f"🏆 {title} 🏆",
-        "description": full_dest if 'full_dest' in locals() else full_desc,
+        "description": full_desc,
         "fields": fields,
         "color": color,
         "footer": {"text": footer_text}
@@ -238,8 +237,8 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching official Tibia.com highscores via curl_cffi for {len(chars)} characters on {WORLD_NAME}...")
-    current_totals = fetch_official_tibia_highscores(chars)
+    print(f"🌐 Fetching official Tibia.com profiles via curl_cffi for {len(chars)} characters on {WORLD_NAME}...")
+    current_totals = fetch_tibia_profiles(chars)
     
     current_scrapes = {}
     daily_pb_achievers = []
@@ -251,7 +250,7 @@ def main():
     for name in chars:
         current_xp = current_totals.get(name)
         if current_xp is None:
-            print(f"⚠️ {name}: Not found in target highscores page.")
+            print(f"⚠️ {name}: Not found in profile scrape.")
             current_scrapes[name] = 0
             continue
             
@@ -272,7 +271,7 @@ def main():
     save_json(BASE_DIR / "totals.json", state_totals)
 
     if total_non_zero == 0 and not current_totals:
-        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch highscores.")
+        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch profile totals.")
         return 
 
     for name, gain in current_scrapes.items():
