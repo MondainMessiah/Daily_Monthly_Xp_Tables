@@ -43,7 +43,6 @@ def fetch_tibiadata_v4_totals(target_names):
     
     for name in target_names:
         safe_name = name.strip().replace(" ", "%20")
-        # Updated to TibiaData v4 endpoint structure
         api_url = f"https://api.tibiadata.com/v4/character/{safe_name}"
         
         try:
@@ -53,18 +52,19 @@ def fetch_tibiadata_v4_totals(target_names):
                 continue
                 
             data = response.json()
-            character_data = data.get("character", {}).get("character", {})
+            # Correct v4 JSON nesting: data -> character
+            character_info = data.get("data", {}).get("character", {})
             
-            if not character_data or "name" not in character_data:
+            if not character_info or "name" not in character_info:
                 print(f"⚠️ {name}: Character not found via v4 API.")
                 continue
                 
-            char_world = character_data.get("world", "")
+            char_world = character_info.get("world", "")
             if char_world.lower() != WORLD_NAME.lower():
                 print(f"⚠️ {name}: Found on world '{char_world}', expected '{WORLD_NAME}'.")
                 continue
                 
-            experience = character_data.get("experience")
+            experience = character_info.get("experience")
             if experience and isinstance(experience, int):
                 found_chars[name] = experience
                 print(f"DEBUG {name}: Fetched total XP -> {experience:,}")
