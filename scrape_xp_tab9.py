@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -15,6 +16,14 @@ PB_PATH = BASE_DIR / "personal_bests.json"
 TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
 WORLD_NAME = "Celesta"
+
+# Direct highscores lookup links for exact character pages
+CHARACTER_URLS = {
+    "Ilumine": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=2&currentpage=5",
+    "Jay The Pally": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=3&currentpage=2",
+    "Kamikadzei": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=3&currentpage=3",
+    "Hex Good": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=5&currentpage=2"
+}
 
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
@@ -31,51 +40,46 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ TIBIADATA V4 HIGHSCORES API FETCHER
+# 🛠️ DIRECT URL HIGHSCORES SCRAPER
 # ==========================================
-def fetch_tibiadata_v4_highscores(target_names):
+def fetch_official_tibia_highscores(target_names):
     """
-    Fetches exact character experience points using the official TibiaData v4 highscores endpoint.
-    Returns a dictionary of {character_name: total_experience_int}
+    Scrapes exact official Tibia.com highscores pages configured per character.
     """
     found_chars = {}
-    headers = {"User-Agent": "TibiaXpTracker/2.0 (Python)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    page = 1
-    max_pages = 5  # Scans top pages to cover all team characters
-    
-    while page <= max_pages and len(found_chars) < len(target_names):
-        # Official v4 highscores JSON endpoint
-        api_url = f"https://api.tibiadata.com/v4/highscores/{WORLD_NAME}/experience/all/{page}"
-        
+    # Track which URLs we need to visit to avoid redundant requests
+    urls_to_visit = set()
+    for name in target_names:
+        if name in CHARACTER_URLS:
+            urls_to_visit.add(CHARACTER_URLS[name])
+        else:
+            # Fallback general highscores search if a new character is added without a custom link
+            urls_to_visit.add(f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&beprotection=-1&category=6&profession=0&currentpage=1")
+
+    for url in urls_to_visit:
         try:
-            response = requests.get(api_url, headers=headers, timeout=15)
+            response = requests.get(url, headers=headers, timeout=15)
             if response.status_code != 200:
-                print(f"⚠️ API status code {response.status_code} on highscores page {page}")
-                break
+                continue
                 
-            data = response.json()
-            entries = data.get("data", {}).get("highscore_list", [])
+            soup = BeautifulSoup(response.text, 'html.parser')
+            rows = soup.find_all('tr')
             
-            if not entries:
-                break
-                
-            found_on_page = 0
-            for entry in entries:
-                name = entry.get("name")
-                value = entry.get("value")  # Total experience points
-                if name in target_names and isinstance(value, int):
-                    found_chars[name] = value
-                    found_on_page += 1
-                    print(f"DEBUG {name}: Found total XP -> {value:,}")
-                    
-            if found_on_page == 0 and page > 1:
-                break
-                
-            page += 1
+            for row in rows:
+                cols = row.find_all('td')
+                if len(cols) >= 5:
+                    name_anchor = cols[1].find('a')
+                    if name_anchor:
+                        char_name = name_anchor.get_text().strip()
+                        xp_text = cols[4].get_text().strip().replace(',', '')
+                        if char_name in target_names and xp_text.isdigit():
+                            found_chars[char_name] = int(xp_text)
+                            print(f"DEBUG {char_name}: Found total XP -> {int(xp_text):,}")
+                            
         except Exception as e:
-            print(f"Error querying TibiaData v4 highscores page {page}: {e}")
-            break
+            print(f"Error scraping URL {url}: {e}")
             
     return found_chars
 
@@ -233,8 +237,8 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching TibiaData v4 highscores for {len(chars)} characters on {WORLD_NAME}...")
-    current_totals = fetch_tibiadata_v4_highscores(chars)
+    print(f"🌐 Fetching official Tibia.com highscores via direct links for {len(chars)} characters on {WORLD_NAME}...")
+    current_totals = fetch_official_tibia_highscores(chars)
     
     current_scrapes = {}
     daily_pb_achievers = []
@@ -246,7 +250,7 @@ def main():
     for name in chars:
         current_xp = current_totals.get(name)
         if current_xp is None:
-            print(f"⚠️ {name}: Not found via TibiaData v4 highscores.")
+            print(f"⚠️ {name}: Not found in target highscores page.")
             current_scrapes[name] = 0
             continue
             
@@ -267,7 +271,7 @@ def main():
     save_json(BASE_DIR / "totals.json", state_totals)
 
     if total_non_zero == 0 and not current_totals:
-        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch v4 highscores data.")
+        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch highscores.")
         return 
 
     for name, gain in current_scrapes.items():
