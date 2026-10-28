@@ -28,8 +28,6 @@ jobs:
 
       - name: Run XP Scraper
         env:
-        name: Run XP Scraper
-        env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python scrape_xp_tab9.py
