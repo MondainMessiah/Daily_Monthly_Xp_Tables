@@ -31,19 +31,20 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ TIBIADATA V3 API CHARACTER FETCHER
+# 🛠️ TIBIADATA V4 API CHARACTER FETCHER
 # ==========================================
-def fetch_tibiadata_totals(target_names):
+def fetch_tibiadata_v4_totals(target_names):
     """
-    Fetches exact character experience points using the official TibiaData v3 API.
+    Fetches exact character experience points using the official TibiaData v4 API.
     Returns a dictionary of {character_name: total_experience_int}
     """
     found_chars = {}
-    headers = {"User-Agent": "TibiaXpTracker/1.0 (Python)"}
+    headers = {"User-Agent": "TibiaXpTracker/2.0 (Python)"}
     
     for name in target_names:
         safe_name = name.strip().replace(" ", "%20")
-        api_url = f"https://api.tibiadata.com/v3/character/{safe_name}"
+        # Updated to TibiaData v4 endpoint structure
+        api_url = f"https://api.tibiadata.com/v4/character/{safe_name}"
         
         try:
             response = requests.get(api_url, headers=headers, timeout=15)
@@ -52,10 +53,10 @@ def fetch_tibiadata_totals(target_names):
                 continue
                 
             data = response.json()
-            character_data = data.get("characters", {}).get("character", {})
+            character_data = data.get("character", {}).get("character", {})
             
             if not character_data or "name" not in character_data:
-                print(f"⚠️ {name}: Character not found via API.")
+                print(f"⚠️ {name}: Character not found via v4 API.")
                 continue
                 
             char_world = character_data.get("world", "")
@@ -69,7 +70,7 @@ def fetch_tibiadata_totals(target_names):
                 print(f"DEBUG {name}: Fetched total XP -> {experience:,}")
                 
         except Exception as e:
-            print(f"Error querying TibiaData API for {name}: {e}")
+            print(f"Error querying TibiaData v4 API for {name}: {e}")
             
     return found_chars
 
@@ -227,8 +228,8 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching TibiaData API totals for {len(chars)} characters on {WORLD_NAME}...")
-    current_totals = fetch_tibiadata_totals(chars)
+    print(f"🌐 Fetching TibiaData v4 API totals for {len(chars)} characters on {WORLD_NAME}...")
+    current_totals = fetch_tibiadata_v4_totals(chars)
     
     current_scrapes = {}
     daily_pb_achievers = []
@@ -240,7 +241,7 @@ def main():
     for name in chars:
         current_xp = current_totals.get(name)
         if current_xp is None:
-            print(f"⚠️ {name}: Not found via TibiaData API.")
+            print(f"⚠️ {name}: Not found via TibiaData v4 API.")
             current_scrapes[name] = 0
             continue
             
@@ -261,7 +262,7 @@ def main():
     save_json(BASE_DIR / "totals.json", state_totals)
 
     if total_non_zero == 0 and not current_totals:
-        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch API data.")
+        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch v4 API data.")
         return 
 
     for name, gain in current_scrapes.items():
