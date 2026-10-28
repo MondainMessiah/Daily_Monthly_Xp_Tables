@@ -300,17 +300,17 @@ def main():
     elif king_died_msg:
         save_json(STREAKS_PATH, all_streaks)
 
-    if dates['is_monday'] and state.get("last_weekly"] != yesterday:
+    if dates['is_monday'] and state.get("last_weekly") != yesterday:
         r = get_summed_xp(logs, chars, days=7)
         if r: send_discord_post("Weekly XP Totals", "🗓️ Period: **Last 7 Days**", r, 0x3498db, dates, "weekly")
         state["last_weekly"] = yesterday
 
-    if dates['is_first'] and state.get("last_monthly"] != yesterday:
+    if dates['is_first'] and state.get("last_monthly") != yesterday:
         r = get_summed_xp(logs, chars, month_prefix=dates['month_filter'])
         if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
         state["last_monthly"] = yesterday
 
-    if daily_ranks and state.get("last_daily"] != yesterday:
+    if daily_ranks and state.get("last_daily") != yesterday:
         sub_text = f"🗓️ Date: **{dates['yesterday_display']}**"
         if king_died_msg:
             sub_text += king_died_msg
