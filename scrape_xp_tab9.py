@@ -33,17 +33,17 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ MULTI-VOCATION TIBIA.COM HIGHSCORES SCRAPER
+# 🛠️ TIBIA.COM HIGHSCORES (Category 6) SCRAPER
 # ==========================================
 def fetch_tibia_com_highscores(target_names):
     """
-    Scrapes official Tibia.com highscores across all vocations for Celesta 
-    to capture exact experience points.
+    Scrapes official Tibia.com highscores using category=6 (Experience) 
+    across all profession filters for Celesta.
     """
     found_chars = {}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    # Vocations: 0 = All, 1 = Knights, 2 = Paladins, 3 = Sorcerers, 4 = Druids
+    # Category 6 is Experience Points on Tibia.com highscores
     professions = [0, 1, 2, 3, 4]
     
     for prof in professions:
@@ -51,9 +51,8 @@ def fetch_tibia_com_highscores(target_names):
             break
             
         page_num = 1
-        # Scan top pages per vocation category to find our tracked characters
         while page_num <= 5:
-            url = f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&category=0&profession={prof}&currentpage={page_num}"
+            url = f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&beprotection=-1&category=6&profession={prof}&currentpage={page_num}"
             try:
                 response = requests.get(url, headers=headers, timeout=15)
                 if response.status_code != 200:
