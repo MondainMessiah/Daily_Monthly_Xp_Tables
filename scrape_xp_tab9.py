@@ -1,8 +1,6 @@
 import os
 import json
 import requests
-from bs4 import BeautifulSoup
-import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -33,63 +31,46 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ TIBIA.COM HIGHSCORES (Category 6) SCRAPER
+# 🛠️ TIBIADATA V3 API CHARACTER FETCHER
 # ==========================================
-def fetch_tibia_com_highscores(target_names):
+def fetch_tibiadata_totals(target_names):
     """
-    Scrapes official Tibia.com highscores using category=6 (Experience) 
-    across all profession filters for Celesta.
+    Fetches exact character experience points using the official TibiaData v3 API.
+    Returns a dictionary of {character_name: total_experience_int}
     """
     found_chars = {}
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {"User-Agent": "TibiaXpTracker/1.0 (Python)"}
     
-    # Category 6 is Experience Points on Tibia.com highscores
-    professions = [0, 1, 2, 3, 4]
-    
-    for prof in professions:
-        if len(found_chars) >= len(target_names):
-            break
-            
-        page_num = 1
-        while page_num <= 5:
-            url = f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&beprotection=-1&category=6&profession={prof}&currentpage={page_num}"
-            try:
-                response = requests.get(url, headers=headers, timeout=15)
-                if response.status_code != 200:
-                    break
-                    
-                soup = BeautifulSoup(response.text, 'html.parser')
-                table = soup.find('table', {'class': 'Table3'})
-                if not table:
-                    tables = soup.find_all('table')
-                    for t in tables:
-                        if 'Points' in t.text and 'Name' in t.text:
-                            table = t
-                            break
-                if not table:
-                    break
-
-                rows = table.find_all('tr')
-                row_count = 0
-                for row in rows:
-                    cols = row.find_all('td')
-                    if len(cols) >= 5:
-                        name_anchor = cols[1].find('a')
-                        if name_anchor:
-                            char_name = name_anchor.get_text().strip()
-                            xp_text = cols[4].get_text().strip().replace(',', '')
-                            if char_name in target_names and xp_text.isdigit():
-                                found_chars[char_name] = int(xp_text)
-                                row_count += 1
-                                
-                if row_count == 0 and page_num > 1:
-                    break
-                    
-                page_num += 1
-            except Exception as e:
-                print(f"Error fetching highscores profession {prof} page {page_num}: {e}")
-                break
+    for name in target_names:
+        safe_name = name.strip().replace(" ", "%20")
+        api_url = f"https://api.tibiadata.com/v3/character/{safe_name}"
+        
+        try:
+            response = requests.get(api_url, headers=headers, timeout=15)
+            if response.status_code != 200:
+                print(f"⚠️ {name}: API status code {response.status_code}")
+                continue
                 
+            data = response.json()
+            character_data = data.get("characters", {}).get("character", {})
+            
+            if not character_data or "name" not in character_data:
+                print(f"⚠️ {name}: Character not found via API.")
+                continue
+                
+            char_world = character_data.get("world", "")
+            if char_world.lower() != WORLD_NAME.lower():
+                print(f"⚠️ {name}: Found on world '{char_world}', expected '{WORLD_NAME}'.")
+                continue
+                
+            experience = character_data.get("experience")
+            if experience and isinstance(experience, int):
+                found_chars[name] = experience
+                print(f"DEBUG {name}: Fetched total XP -> {experience:,}")
+                
+        except Exception as e:
+            print(f"Error querying TibiaData API for {name}: {e}")
+            
     return found_chars
 
 # ==========================================
@@ -246,8 +227,8 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching official Tibia.com highscores for {len(chars)} characters on {WORLD_NAME}...")
-    current_totals = fetch_tibia_com_highscores(chars)
+    print(f"🌐 Fetching TibiaData API totals for {len(chars)} characters on {WORLD_NAME}...")
+    current_totals = fetch_tibiadata_totals(chars)
     
     current_scrapes = {}
     daily_pb_achievers = []
@@ -259,7 +240,7 @@ def main():
     for name in chars:
         current_xp = current_totals.get(name)
         if current_xp is None:
-            print(f"⚠️ {name}: Not found in Tibia.com highscores.")
+            print(f"⚠️ {name}: Not found via TibiaData API.")
             current_scrapes[name] = 0
             continue
             
@@ -280,7 +261,7 @@ def main():
     save_json(BASE_DIR / "totals.json", state_totals)
 
     if total_non_zero == 0 and not current_totals:
-        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch highscores.")
+        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch API data.")
         return 
 
     for name, gain in current_scrapes.items():
@@ -314,22 +295,22 @@ def main():
         if king_died_msg:
             king_died_msg += f"\n👑 **{top_daily_winner}** has instantly seized the vacant throne as the new King!"
         else:
-            king_died_msg = f"\n\n👑 **{top_daily_winner}** has claimed the vacant throne!"
+            king_died_msg = f"\n👑 **{top_daily_winner}** has claimed the vacant throne!"
         save_json(STREAKS_PATH, all_streaks)
     elif king_died_msg:
         save_json(STREAKS_PATH, all_streaks)
 
-    if dates['is_monday'] and state.get("last_weekly") != yesterday:
+    if dates['is_monday'] and state.get("last_weekly"] != yesterday:
         r = get_summed_xp(logs, chars, days=7)
         if r: send_discord_post("Weekly XP Totals", "🗓️ Period: **Last 7 Days**", r, 0x3498db, dates, "weekly")
         state["last_weekly"] = yesterday
 
-    if dates['is_first'] and state.get("last_monthly") != yesterday:
+    if dates['is_first'] and state.get("last_monthly"] != yesterday:
         r = get_summed_xp(logs, chars, month_prefix=dates['month_filter'])
         if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
         state["last_monthly"] = yesterday
 
-    if daily_ranks and state.get("last_daily") != yesterday:
+    if daily_ranks and state.get("last_daily"] != yesterday:
         sub_text = f"🗓️ Date: **{dates['yesterday_display']}**"
         if king_died_msg:
             sub_text += king_died_msg
