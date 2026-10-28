@@ -31,46 +31,51 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ TIBIADATA V4 API CHARACTER FETCHER
+# 🛠️ TIBIADATA V4 HIGHSCORES API FETCHER
 # ==========================================
-def fetch_tibiadata_v4_totals(target_names):
+def fetch_tibiadata_v4_highscores(target_names):
     """
-    Fetches exact character experience points using the official TibiaData v4 API.
+    Fetches exact character experience points using the official TibiaData v4 highscores endpoint.
     Returns a dictionary of {character_name: total_experience_int}
     """
     found_chars = {}
     headers = {"User-Agent": "TibiaXpTracker/2.0 (Python)"}
     
-    for name in target_names:
-        safe_name = name.strip().replace(" ", "%20")
-        api_url = f"https://api.tibiadata.com/v4/character/{safe_name}"
+    page = 1
+    max_pages = 5  # Scans top pages to cover all team characters
+    
+    while page <= max_pages and len(found_chars) < len(target_names):
+        # Official v4 highscores JSON endpoint
+        api_url = f"https://api.tibiadata.com/v4/highscores/{WORLD_NAME}/experience/all/{page}"
         
         try:
             response = requests.get(api_url, headers=headers, timeout=15)
             if response.status_code != 200:
-                print(f"⚠️ {name}: API status code {response.status_code}")
-                continue
+                print(f"⚠️ API status code {response.status_code} on highscores page {page}")
+                break
                 
             data = response.json()
-            # Correct v4 JSON nesting: data -> character
-            character_info = data.get("data", {}).get("character", {})
+            entries = data.get("data", {}).get("highscore_list", [])
             
-            if not character_info or "name" not in character_info:
-                print(f"⚠️ {name}: Character not found via v4 API.")
-                continue
+            if not entries:
+                break
                 
-            char_world = character_info.get("world", "")
-            if char_world.lower() != WORLD_NAME.lower():
-                print(f"⚠️ {name}: Found on world '{char_world}', expected '{WORLD_NAME}'.")
-                continue
+            found_on_page = 0
+            for entry in entries:
+                name = entry.get("name")
+                value = entry.get("value")  # Total experience points
+                if name in target_names and isinstance(value, int):
+                    found_chars[name] = value
+                    found_on_page += 1
+                    print(f"DEBUG {name}: Found total XP -> {value:,}")
+                    
+            if found_on_page == 0 and page > 1:
+                break
                 
-            experience = character_info.get("experience")
-            if experience and isinstance(experience, int):
-                found_chars[name] = experience
-                print(f"DEBUG {name}: Fetched total XP -> {experience:,}")
-                
+            page += 1
         except Exception as e:
-            print(f"Error querying TibiaData v4 API for {name}: {e}")
+            print(f"Error querying TibiaData v4 highscores page {page}: {e}")
+            break
             
     return found_chars
 
@@ -228,8 +233,8 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching TibiaData v4 API totals for {len(chars)} characters on {WORLD_NAME}...")
-    current_totals = fetch_tibiadata_v4_totals(chars)
+    print(f"🌐 Fetching TibiaData v4 highscores for {len(chars)} characters on {WORLD_NAME}...")
+    current_totals = fetch_tibiadata_v4_highscores(chars)
     
     current_scrapes = {}
     daily_pb_achievers = []
@@ -241,7 +246,7 @@ def main():
     for name in chars:
         current_xp = current_totals.get(name)
         if current_xp is None:
-            print(f"⚠️ {name}: Not found via TibiaData v4 API.")
+            print(f"⚠️ {name}: Not found via TibiaData v4 highscores.")
             current_scrapes[name] = 0
             continue
             
@@ -262,7 +267,7 @@ def main():
     save_json(BASE_DIR / "totals.json", state_totals)
 
     if total_non_zero == 0 and not current_totals:
-        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch v4 API data.")
+        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch v4 highscores data.")
         return 
 
     for name, gain in current_scrapes.items():
