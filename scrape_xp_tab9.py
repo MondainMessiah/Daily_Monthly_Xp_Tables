@@ -54,15 +54,17 @@ async def fetch_via_playwright(target_names):
         )
         page = await context.new_page()
 
-        for name, url in CHARACTER_URLS.items():
-            if name not in target_names:
+        for name in target_names:
+            url = CHARACTER_URLS.get(name)
+            if not url:
                 continue
                 
             try:
                 print(f"🌐 Fetching {name} via Playwright -> {url}")
-                await page.goto(url, timeout=40000, wait_until="domcontentloaded")
+                # Explicitly await navigation so the script actually waits for the page
+                await page.goto(url, timeout=45000, wait_until="domcontentloaded")
                 
-                # Allow 3 seconds for Cloudflare challenge / table rendering
+                # Wait 3 seconds for Cloudflare challenge check / table DOM rendering
                 await page.wait_for_timeout(3000)
                 
                 content = await page.content()
