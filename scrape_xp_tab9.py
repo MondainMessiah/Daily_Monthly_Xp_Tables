@@ -1,15 +1,11 @@
 import os
 import json
 import requests
-import urllib.parse
 from bs4 import BeautifulSoup
 import re
-import time
-import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from playwright.sync_api import sync_playwright
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -20,20 +16,11 @@ STREAKS_PATH = BASE_DIR / "streaks.json"
 PB_PATH = BASE_DIR / "personal_bests.json"
 TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
-
-# --- 🎬 GIF CONFIGURATION ---
-KING_GIFS = [
-    "https://i.giphy.com/vX79ZAsCNe6n6.gif",      # Robert Baratheon
-    "https://i.giphy.com/p6jVTOTCo63cs.gif",      # Joffrey Baratheon
-    "https://i.giphy.com/8v3EErE79ZOpq.gif",      # Robb Stark
-    "https://i.giphy.com/26vUJAbhM8kHhA8X6.gif",   # Jon Snow
-    "https://i.giphy.com/l41YedIBvT817KOF2.gif"    # Tommen Baratheon
-]
+WORLD_NAME = "Celesta"  # Configured for Celesta
 
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
-    
     target_date = now - timedelta(days=1)
         
     return {
@@ -46,78 +33,73 @@ def get_dates():
     }
 
 # ==========================================
-# 🛠️ THE DATA SCRAPER (Wait for Live Data Hydration)
+# 🛠️ OFFICIAL TIBIA.COM HIGHSCORES SCRAPER
 # ==========================================
-def fetch_data_playwright(page, name, dates):
-    target_date = dates['yesterday_iso']  # e.g., "2026-10-21"
-    print(f"🌐 Fetching profile for {name} strictly targeting date {target_date}...")
+def fetch_tibia_com_highscores(target_names):
+    """
+    Scrapes official Tibia.com highscores for experience points.
+    Returns a dictionary of {character_name: total_experience_int}
+    """
+    found_chars = {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    encoded_name = urllib.parse.quote(name)
-    urls_to_try = [
-        f"https://tibiastats.pl/en/characters/?name={encoded_name}",
-        f"https://tibiastats.pl/en/character/{encoded_name}",
-        f"https://tibiastats.pl/en/characters/{encoded_name}"
-    ]
+    page_num = 1
+    max_pages = 10  # Safe upper limit to cover top ranks
     
-    for profile_url in urls_to_try:
+    while page_num <= max_pages and len(found_chars) < len(target_names):
+        url = f"https://www.tibia.com/community/?subtopic=highscores&world={WORLD_NAME}&category=0&profession=0&currentpage={page_num}"
         try:
-            page.goto(profile_url, wait_until="networkidle", timeout=25000)
-            time.sleep(2)
-            
-            try:
-                exp_btn = page.query_selector("button:has-text('Experience')")
-                if exp_btn:
-                    exp_btn.click()
-            except Exception:
-                pass
+            response = requests.get(url, headers=headers, timeout=15)
+            if response.status_code != 200:
+                break
+                
+            soup = BeautifulSoup(response.text, 'html.parser')
+            table = soup.find('table', {'class': 'Table3'})
+            if not table:
+                tables = soup.find_all('table')
+                for t in tables:
+                    if 'Points' in t.text and 'Name' in t.text:
+                        table = t
+                        break
+            if not table:
+                break
 
-            # Wait for "Loading the history..." to vanish
-            try:
-                page.wait_for_selector("text=Loading the history...", state="detached", timeout=12000)
-            except Exception:
-                pass
-
-            # Wait for table rows to appear
-            try:
-                page.wait_for_selector("tr", timeout=8000)
-            except Exception:
-                continue
-
-            soup = BeautifulSoup(page.content(), 'html.parser')
-            rows = soup.find_all('tr')
-            
-            if not rows:
-                continue
-
-            print(f"DEBUG {name}: Hydrated {len(rows)} <tr> rows using {profile_url}")
-            
+            rows = table.find_all('tr')
+            row_count = 0
             for row in rows:
-                tds = row.find_all('td')
-                if len(tds) >= 3:
-                    row_date = tds[0].get_text().strip()
-                    if target_date in row_date:
-                        gain_cell = tds[2]
-                        span_el = gain_cell.find('span')
-                        gain_text = span_el.get_text().strip() if span_el else gain_cell.get_text().strip()
-                        
-                        digits = "".join(c for c in gain_text if c.isdigit())
-                        if digits:
-                            gain_val = int(digits)
-                            if gain_val < MAX_XP_THRESHOLD:
-                                if '-' in gain_text or 'trending-down' in str(gain_cell):
-                                    gain_val = -gain_val
-                                print(f"DEBUG {name}: Successfully parsed exact match for {target_date} -> {gain_val:,}")
-                                return gain_val
-
+                cols = row.find_all('td')
+                if len(cols) >= 5:
+                    name_anchor = cols[1].find('a')
+                    if name_anchor:
+                        char_name = name_anchor.get_text().strip()
+                        xp_text = cols[4].get_text().strip().replace(',', '')
+                        if char_name in target_names and xp_text.isdigit():
+                            found_chars[char_name] = int(xp_text)
+                            row_count += 1
+                            
+            if row_count == 0 and page_num > 1:
+                break
+                
+            page_num += 1
         except Exception as e:
-            print(f"DEBUG {name}: Error attempting {profile_url} -> {e}")
-
-    print(f"DEBUG {name}: No entry found for strict target date {target_date}")
-    return 0
+            print(f"Error fetching Tibia.com highscores page {page_num}: {e}")
+            break
+            
+    return found_chars
 
 # ==========================================
 # 🔥 ENGINES (Streak / PB / Post)
 # ==========================================
+def load_json(path, fallback=None):
+    if not path.exists(): return fallback or {}
+    try:
+        with open(path, "r") as f:
+            content = f.read().strip(); return json.loads(content) if content else (fallback or {})
+    except: return fallback or {}
+
+def save_json(path, data):
+    with open(path, "w") as f: json.dump(data, f, indent=2)
+
 def update_personal_best(name, current_gain):
     pb_data = load_json(PB_PATH, {})
     current_gain = int(current_gain)
@@ -136,7 +118,7 @@ def update_period_streak(category, winner_name):
     last_count = data.get("count", 0)
     reigning_king = all_streaks.get("reigning_king", "")
     
-    broken_msg, king_msg, event_gif = "", "", None
+    broken_msg, king_msg = "", ""
     
     if last_winner.strip().lower() != winner_name.strip().lower():
         if last_count >= 2 and category == "daily":
@@ -146,20 +128,17 @@ def update_period_streak(category, winner_name):
         new_count = last_count + 1
         
     if category == "daily" and new_count >= 3:
-        selected_gif = random.choice(KING_GIFS)
         if winner_name.strip().lower() != reigning_king.strip().lower():
             king_msg = f"\n👑 **A NEW KING HAS BEEN CROWNED!** 👑\n**{winner_name}** has usurped the throne with a 3-day streak!"
             all_streaks["reigning_king"] = winner_name
-            event_gif = selected_gif
         else:
             king_msg = f"\n👑 **THE KING EXTENDS HIS REIGN!** 👑\n**{winner_name}** is on a **{new_count} day** streak!"
-            event_gif = selected_gif
             
     all_streaks[category] = {"last_winner": winner_name, "count": new_count}
     save_json(STREAKS_PATH, all_streaks)
     
     updated_king = all_streaks.get("reigning_king", "")
-    return new_count, broken_msg, king_msg, event_gif, updated_king, winner_name
+    return new_count, broken_msg, king_msg, updated_king, winner_name
 
 def make_bar(val, max_val):
     if max_val <= 0: return "⬛" * 10
@@ -170,13 +149,15 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook or not ranking: return
     pb_list = pb_list or []
-    max_xp = ranking[0][1]
+    max_xp = ranking[0][1] if ranking[0][1] > 0 else 1
     curr_total = sum(item[1] for item in ranking)
     
-    broken_msg, king_msg, final_gif, current_king, streak_holder, streak_count = "", "", None, "", "", 0
-    if streak_cat:
-        count, b_msg, k_msg, e_gif, king, holder = update_period_streak(streak_cat, ranking[0][0])
-        broken_msg, king_msg, final_gif, current_king, streak_holder, streak_count = b_msg, k_msg, e_gif, king, holder, count
+    top_winner = ranking[0][0] if ranking[0][1] > 0 else ""
+    
+    broken_msg, king_msg, current_king, streak_holder, streak_count = "", "", "", "", 0
+    if streak_cat and top_winner:
+        count, b_msg, k_msg, king, holder = update_period_streak(streak_cat, top_winner)
+        broken_msg, king_msg, current_king, streak_holder, streak_count = b_msg, k_msg, king, holder, count
     else:
         current_king = load_json(STREAKS_PATH, {}).get("reigning_king", "")
 
@@ -186,7 +167,11 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
 
     fields = []
     medals = ["🥇", "🥈", "🥉"]
-    for i, (name, xp) in enumerate(ranking[:3]):
+    
+    gainers = [item for item in ranking if item[1] > 0]
+    zeroers = [item for item in ranking if item[1] <= 0]
+
+    for i, (name, xp) in enumerate(gainers[:3]):
         pb_star = " ⭐️" if name in pb_list else ""
         person_tags = ""
         if name.strip().lower() == current_king.strip().lower():
@@ -202,9 +187,13 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         })
 
     others = []
-    for name, xp in ranking[3:10]:
+    for name, xp in gainers[3:]:
         others.append(f"**{name}** (`{xp:+,} XP`){' ⭐️' if name in pb_list else ''}")
-    if others: fields.append({"name": "--- Other Gains ---", "value": "\n".join(others), "inline": False})
+    for name, xp in zeroers:
+        others.append(f"**{name}** (`0 XP`) 💤")
+
+    if others:
+        fields.append({"name": "--- Other Characters ---", "value": "\n".join(others), "inline": False})
 
     legend = "⭐️=PB | 🔥=Streak"
     if streak_cat == "daily":
@@ -218,8 +207,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         "color": color,
         "footer": {"text": footer_text}
     }
-    if final_gif:
-        main_embed["image"] = {"url": final_gif}
 
     requests.post(webhook, json={"embeds": [main_embed]})
 
@@ -244,57 +231,63 @@ def get_summed_xp(logs, chars, days=None, month_prefix=None):
                     digits = "".join(c for c in str(v) if c.isdigit())
                     if digits:
                         total += int(digits) * (-1 if str(v).startswith('-') else 1)
-        if total != 0:
-            rankings.append((name, total))
+        rankings.append((name, total))
             
     rankings.sort(key=lambda x: x[1], reverse=True)
     return rankings
-
-def load_json(path, fallback=None):
-    if not path.exists(): return fallback or {}
-    try:
-        with open(path, "r") as f:
-            content = f.read().strip(); return json.loads(content) if content else (fallback or {})
-    except: return fallback or {}
-
-def save_json(path, data):
-    with open(path, "w") as f: json.dump(data, f, indent=2)
 
 def main():
     dates = get_dates(); logs, state = load_json(LOG_PATH), load_json(STATE_PATH)
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Starting Playwright scraper for strict target date {dates['yesterday_iso']}...")
-    current_scrapes = {}; daily_pb_achievers = []; total_non_zero = 0
+    print(f"🌐 Fetching official Tibia.com highscores for {len(chars)} characters on {WORLD_NAME}...")
+    current_totals = fetch_tibia_com_highscores(chars)
+    
+    current_scrapes = {}
+    daily_pb_achievers = []
+    total_non_zero = 0
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-        page = context.new_page()
+    yesterday = dates['yesterday_iso']
+    state_totals = load_json(BASE_DIR / "totals.json", {})
 
-        for name in chars:
-            gain = fetch_data_playwright(page, name, dates)
-            current_scrapes[name] = gain
-            if gain != 0: total_non_zero += 1
-            time.sleep(1)
+    for name in chars:
+        current_xp = current_totals.get(name)
+        if current_xp is None:
+            print(f"⚠️ {name}: Not found in Tibia.com highscores (may be unranked).")
+            current_scrapes[name] = 0
+            continue
+            
+        old_total = state_totals.get(name)
+        
+        if old_total is not None:
+            gain = current_xp - old_total
+            if gain < -MAX_XP_THRESHOLD or gain > MAX_XP_THRESHOLD:
+                gain = 0
+        else:
+            gain = 0
+            
+        state_totals[name] = current_xp
+        current_scrapes[name] = gain
+        if gain != 0: 
+            total_non_zero += 1
 
-        browser.close()
+    save_json(BASE_DIR / "totals.json", state_totals)
 
-    if total_non_zero == 0:
-        print(f"🛑 ANTI-ZERO TRIGGERED.")
+    if total_non_zero == 0 and not current_totals:
+        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch highscores.")
         return 
 
     for name, gain in current_scrapes.items():
         if name not in logs: logs[name] = {}
-        logs[name][dates['yesterday_iso']] = f"{gain:+,}"
+        logs[name][yesterday] = f"{gain:+,}"
         if gain > 0 and update_personal_best(name, gain): daily_pb_achievers.append(name)
     
     save_json(LOG_PATH, logs)
 
-    daily_ranks = [(name, gain) for name, gain in current_scrapes.items() if gain != 0]
+    daily_ranks = [(name, gain) for name, gain in current_scrapes.items()]
     daily_ranks.sort(key=lambda x: x[1], reverse=True)
-    top_daily_winner = daily_ranks[0][0] if daily_ranks else ""
+    top_daily_winner = daily_ranks[0][0] if daily_ranks and daily_ranks[0][1] > 0 else ""
 
     all_streaks = load_json(STREAKS_PATH, {"daily":{}, "weekly":{}, "monthly":{}, "reigning_king": ""})
     reigning_king = all_streaks.get("reigning_king", "")
@@ -321,22 +314,22 @@ def main():
     elif king_died_msg:
         save_json(STREAKS_PATH, all_streaks)
 
-    if dates['is_monday'] and state.get("last_weekly") != dates['yesterday_iso']:
+    if dates['is_monday'] and state.get("last_weekly") != yesterday:
         r = get_summed_xp(logs, chars, days=7)
         if r: send_discord_post("Weekly XP Totals", "🗓️ Period: **Last 7 Days**", r, 0x3498db, dates, "weekly")
-        state["last_weekly"] = dates['yesterday_iso']
+        state["last_weekly"] = yesterday
 
-    if dates['is_first'] and state.get("last_monthly") != dates['yesterday_iso']:
+    if dates['is_first'] and state.get("last_monthly") != yesterday:
         r = get_summed_xp(logs, chars, month_prefix=dates['month_filter'])
         if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
-        state["last_monthly"] = dates['yesterday_iso']
+        state["last_monthly"] = yesterday
 
-    if daily_ranks and state.get("last_daily") != dates['yesterday_iso']:
+    if daily_ranks and state.get("last_daily") != yesterday:
         sub_text = f"🗓️ Date: **{dates['yesterday_display']}**"
         if king_died_msg:
             sub_text += king_died_msg
         send_discord_post("Daily Champion", sub_text, daily_ranks, 0x2ecc71, dates, "daily", pb_list=daily_pb_achievers)
-        state["last_daily"] = dates['yesterday_iso']
+        state["last_daily"] = yesterday
 
     save_json(STATE_PATH, state)
 
