@@ -31,31 +31,29 @@ def get_dates():
     }
 
 # ==========================================
-# 🚀 TIBIADATA HIGHSCORES API (Restriction-Mode Safe)
+# 🚀 TIBIADATA HIGHSCORES API (Expanded Pages)
 # ==========================================
 def fetch_via_tibiadata_highscores(target_names):
     found_chars = {}
-    
-    # TibiaData API expects lowercase world slugs (e.g., 'celesta')
     world_slug = WORLD_NAME.lower()
-    pages_to_check = [1, 2, 3, 5]
+    
+    # Check pages 1 through 10 to ensure all characters are caught regardless of rank shifts
+    pages_to_check = range(1, 11)
     cached_highscores = {}
 
     for page in pages_to_check:
-        # Using the unrestricted 'all' category and lowercase world name
         url = f"https://api.tibiadata.com/v4/highscores/{world_slug}/experience/all/{page}"
-        print(f"🌐 Fetching Highscores API page {page} -> {url}")
         try:
             response = requests.get(url, timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 highscore_list = data.get("highscores", {}).get("highscore_list", [])
+                if not highscore_list:
+                    break # Stop checking if pagination exceeds available results
                 for entry in highscore_list:
                     c_name = entry.get("name", "")
                     c_xp = entry.get("value", 0)
                     cached_highscores[c_name.lower()] = int(c_xp)
-            else:
-                print(f"❌ [HTTP {response.status_code}] Failed to fetch page {page}: {response.text}")
         except Exception as e:
             print(f"❌ [ERROR] API error on page {page}: {e}")
 
@@ -66,7 +64,7 @@ def fetch_via_tibiadata_highscores(target_names):
             found_chars[name] = matched_xp
             print(f"✅ [SUCCESS] {name}: {matched_xp:,} XP")
         else:
-            print(f"⚠️ [NOT FOUND] {name} was not found in pages {pages_to_check}.")
+            print(f"⚠️ [NOT FOUND] {name} was not found in highscore pages 1-10.")
             
     return found_chars
 
@@ -236,13 +234,15 @@ def main():
 
     for name in chars:
         current_xp = current_totals.get(name)
-        if current_xp is None:
-            print(f"⚠️ {name}: Not found in API highscore scrape.")
-            current_scrapes[name] = 0
-            continue
-            
         old_total = state_totals.get(name)
         
+        if current_xp is None:
+            print(f"⚠️ {name}: Not found in API highscore scrape. Preserving old total.")
+            current_scrapes[name] = 0
+            if old_total is not None:
+                state_totals[name] = old_total # Keep existing baseline
+            continue
+            
         if old_total is not None:
             gain = current_xp - old_total
             if gain < -MAX_XP_THRESHOLD or gain > MAX_XP_THRESHOLD:
@@ -257,7 +257,7 @@ def main():
 
     save_json(BASE_DIR / "totals.json", state_totals)
 
-    if total_non_zero == 0 and not current_totals:
+    if total_non_zero == 0 and len(current_totals) == 0:
         print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch API totals.")
         return 
 
