@@ -31,35 +31,42 @@ def get_dates():
     }
 
 # ==========================================
-# 🚀 TIBIADATA V4 API SCRAPER (Cloudflare-Proof)
+# 🚀 TIBIADATA HIGHSCORES API (Restriction-Mode Safe)
 # ==========================================
-def fetch_via_tibiadata(target_names):
+def fetch_via_tibiadata_highscores(target_names):
     found_chars = {}
     
-    for name in target_names:
-        formatted_name = name.strip().lower().replace(" ", "%20")
-        url = f"https://api.tibiadata.com/v4/character/{formatted_name}"
-        
-        print(f"🌐 Fetching {name} via TibiaData API -> {url}")
+    # TibiaData API expects lowercase world slugs (e.g., 'celesta')
+    world_slug = WORLD_NAME.lower()
+    pages_to_check = [1, 2, 3, 5]
+    cached_highscores = {}
+
+    for page in pages_to_check:
+        # Using the unrestricted 'all' category and lowercase world name
+        url = f"https://api.tibiadata.com/v4/highscores/{world_slug}/experience/all/{page}"
+        print(f"🌐 Fetching Highscores API page {page} -> {url}")
         try:
             response = requests.get(url, timeout=15)
             if response.status_code == 200:
                 data = response.json()
-                char_info = data.get("character", {}).get("character", {})
-                
-                if char_info and char_info.get("world", "").lower() == WORLD_NAME.lower():
-                    total_xp = char_info.get("experience", 0)
-                    if total_xp > 1000:
-                        found_chars[name] = int(total_xp)
-                        print(f"✅ [SUCCESS] {name}: {int(total_xp):,} XP")
-                    else:
-                        print(f"⚠️ [LOW XP] {name} experience invalid or zero.")
-                else:
-                    print(f"⚠️ [WORLD MISMATCH] {name} not found on {WORLD_NAME}.")
+                highscore_list = data.get("highscores", {}).get("highscore_list", [])
+                for entry in highscore_list:
+                    c_name = entry.get("name", "")
+                    c_xp = entry.get("value", 0)
+                    cached_highscores[c_name.lower()] = int(c_xp)
             else:
-                print(f"❌ [HTTP {response.status_code}] Failed to fetch {name}.")
+                print(f"❌ [HTTP {response.status_code}] Failed to fetch page {page}: {response.text}")
         except Exception as e:
-            print(f"❌ [ERROR] API error fetching {name}: {e}")
+            print(f"❌ [ERROR] API error on page {page}: {e}")
+
+    # Match your target characters against the cached highscore pages
+    for name in target_names:
+        matched_xp = cached_highscores.get(name.lower())
+        if matched_xp:
+            found_chars[name] = matched_xp
+            print(f"✅ [SUCCESS] {name}: {matched_xp:,} XP")
+        else:
+            print(f"⚠️ [NOT FOUND] {name} was not found in pages {pages_to_check}.")
             
     return found_chars
 
@@ -217,8 +224,8 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching character totals via TibiaData API for {len(chars)} characters...")
-    current_totals = fetch_via_tibiadata(chars)
+    print(f"🌐 Fetching character totals via TibiaData Highscores API for {len(chars)} characters...")
+    current_totals = fetch_via_tibiadata_highscores(chars)
     
     current_scrapes = {}
     daily_pb_achievers = []
@@ -230,7 +237,7 @@ def main():
     for name in chars:
         current_xp = current_totals.get(name)
         if current_xp is None:
-            print(f"⚠️ {name}: Not found in API scrape.")
+            print(f"⚠️ {name}: Not found in API highscore scrape.")
             current_scrapes[name] = 0
             continue
             
