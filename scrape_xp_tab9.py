@@ -222,6 +222,7 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         "footer": {"text": footer_text}
     }
 
+    import requests
     requests.post(webhook, json={"embeds": [main_embed]})
 
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
@@ -335,7 +336,7 @@ def main():
 
     if dates['is_first'] and state.get("last_monthly") != yesterday:
         r = get_summed_xp(logs, chars, month_prefix=dates['month_filter'])
-        if r: send_discard_post = send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
+        if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
         state["last_monthly"] = yesterday
 
     if daily_ranks and state.get("last_daily") != yesterday:
