@@ -40,9 +40,6 @@ def get_dates():
         "month_name": target_date.strftime("%B")
     }
 
-# ==========================================
-# 🛠️ CLOUDFLARE-BYPASS PLAYWRIGHT SCRAPER
-# ==========================================
 async def fetch_via_playwright(target_names):
     found_chars = {}
     
@@ -73,8 +70,8 @@ async def fetch_via_playwright(target_names):
             if not url:
                 continue
                 
+            print(f"🌐 [START] Fetching {name} -> {url}")
             try:
-                print(f"🌐 Fetching {name} via Playwright -> {url}")
                 await page.goto(url, timeout=45000, wait_until="domcontentloaded")
                 await page.wait_for_timeout(4000)
                 
@@ -90,20 +87,20 @@ async def fetch_via_playwright(target_names):
                             clean_val = cols[4].get_text().strip().replace(',', '')
                             if clean_val.isdigit():
                                 found_chars[name] = int(clean_val)
-                                print(f"DEBUG {name}: Found total XP -> {int(clean_val):,}")
+                                print(f"✅ [SUCCESS] {name}: {int(clean_val):,}")
                                 break
                     if name in found_chars:
                         break
                         
+                if name not in found_chars:
+                    print(f"⚠️ [MISSING] {name} not found in DOM table for this page.")
+                        
             except Exception as e:
-                print(f"Playwright error fetching {name}: {e}")
+                print(f"❌ [ERROR] Playwright error fetching {name}: {e}")
                 
         await browser.close()
     return found_chars
 
-# ==========================================
-# 🔥 ENGINES (Streak / PB / Post)
-# ==========================================
 def load_json(path, fallback=None):
     if not path.exists(): return fallback or {}
     try:
