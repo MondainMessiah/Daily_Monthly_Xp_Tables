@@ -47,7 +47,6 @@ async def fetch_via_playwright(target_names):
     found_chars = {}
     
     async with async_playwright() as p:
-        # Launch with anti-detection flags to bypass Cloudflare
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -66,9 +65,7 @@ async def fetch_via_playwright(target_names):
             timezone_id="Europe/London"
         )
         
-        # Mask automation flags so Cloudflare doesn't flag the browser
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
         page = await context.new_page()
 
         for name in target_names:
@@ -79,8 +76,6 @@ async def fetch_via_playwright(target_names):
             try:
                 print(f"🌐 Fetching {name} via Playwright -> {url}")
                 await page.goto(url, timeout=45000, wait_until="domcontentloaded")
-                
-                # Wait 4 seconds for Cloudflare JS challenge / table rendering to complete
                 await page.wait_for_timeout(4000)
                 
                 content = await page.content()
@@ -88,12 +83,12 @@ async def fetch_via_playwright(target_names):
                 
                 rows = soup.find_all('tr')
                 for row in rows:
-                    row_text = row.get_text()
-                    if name.lower() in row_text.lower():
+                    char_link = row.find('a', href=lambda href: href and 'subtopic=characters' in href)
+                    if char_link and char_link.get_text().strip().lower() == name.lower():
                         cols = row.find_all('td')
-                        for col in cols:
-                            clean_val = col.get_text().strip().replace(',', '')
-                            if clean_val.isdigit() and int(clean_val) > 1000:
+                        if len(cols) >= 5:
+                            clean_val = cols[4].get_text().strip().replace(',', '')
+                            if clean_val.isdigit():
                                 found_chars[name] = int(clean_val)
                                 print(f"DEBUG {name}: Found total XP -> {int(clean_val):,}")
                                 break
@@ -340,7 +335,7 @@ def main():
 
     if dates['is_first'] and state.get("last_monthly") != yesterday:
         r = get_summed_xp(logs, chars, month_prefix=dates['month_filter'])
-        if r: send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
+        if r: send_discard_post = send_discord_post("Monthly XP Totals", f"🗓️ Month: **{dates['month_name']}**", r, 0xf1c40f, dates, "monthly")
         state["last_monthly"] = yesterday
 
     if daily_ranks and state.get("last_daily") != yesterday:
