@@ -1,8 +1,6 @@
 import os
 import json
-import asyncio
-from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
+import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -18,14 +16,6 @@ TIMEZONE = "Europe/London"
 MAX_XP_THRESHOLD = 200000000 
 WORLD_NAME = "Celesta"
 
-CHARACTER_URLS = {
-    "Ilumine": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=2&currentpage=5",
-    "Jay The Pally": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=3&currentpage=2",
-    "Kamikadzei": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=3&currentpage=3",
-    "Hex Good": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=5&currentpage=2",
-    "Zanron The Monk": "https://www.tibia.com/community/?subtopic=highscores&world=Celesta&beprotection=-1&category=6&profession=1&currentpage=1"
-}
-
 def get_dates():
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
@@ -40,67 +30,42 @@ def get_dates():
         "month_name": target_date.strftime("%B")
     }
 
-async def fetch_via_playwright(target_names):
+# ==========================================
+# 🚀 TIBIADATA V4 API SCRAPER (Cloudflare-Proof)
+# ==========================================
+def fetch_via_tibiadata(target_names):
     found_chars = {}
     
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-infobars",
-                "--window-size=1280,800",
-            ]
-        )
+    for name in target_names:
+        formatted_name = name.strip().lower().replace(" ", "%20")
+        url = f"https://api.tibiadata.com/v4/character/{formatted_name}"
         
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800},
-            locale="en-US",
-            timezone_id="Europe/London"
-        )
-        
-        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        page = await context.new_page()
-
-        for name in target_names:
-            url = CHARACTER_URLS.get(name)
-            if not url:
-                continue
+        print(f"🌐 Fetching {name} via TibiaData API -> {url}")
+        try:
+            response = requests.get(url, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                char_info = data.get("character", {}).get("character", {})
                 
-            print(f"🌐 [START] Fetching {name} -> {url}")
-            try:
-                await page.goto(url, timeout=45000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(4000)
-                
-                content = await page.content()
-                soup = BeautifulSoup(content, 'html.parser')
-                
-                rows = soup.find_all('tr')
-                for row in rows:
-                    char_link = row.find('a', href=lambda href: href and 'subtopic=characters' in href)
-                    if char_link and char_link.get_text().strip().lower() == name.lower():
-                        cols = row.find_all('td')
-                        if len(cols) >= 5:
-                            clean_val = cols[4].get_text().strip().replace(',', '')
-                            if clean_val.isdigit():
-                                found_chars[name] = int(clean_val)
-                                print(f"✅ [SUCCESS] {name}: {int(clean_val):,}")
-                                break
-                    if name in found_chars:
-                        break
-                        
-                if name not in found_chars:
-                    print(f"⚠️ [MISSING] {name} not found in DOM table for this page.")
-                        
-            except Exception as e:
-                print(f"❌ [ERROR] Playwright error fetching {name}: {e}")
-                
-        await browser.close()
+                if char_info and char_info.get("world", "").lower() == WORLD_NAME.lower():
+                    total_xp = char_info.get("experience", 0)
+                    if total_xp > 1000:
+                        found_chars[name] = int(total_xp)
+                        print(f"✅ [SUCCESS] {name}: {int(total_xp):,} XP")
+                    else:
+                        print(f"⚠️ [LOW XP] {name} experience invalid or zero.")
+                else:
+                    print(f"⚠️ [WORLD MISMATCH] {name} not found on {WORLD_NAME}.")
+            else:
+                print(f"❌ [HTTP {response.status_code}] Failed to fetch {name}.")
+        except Exception as e:
+            print(f"❌ [ERROR] API error fetching {name}: {e}")
+            
     return found_chars
 
+# ==========================================
+# 🔥 ENGINES (Streak / PB / Post)
+# ==========================================
 def load_json(path, fallback=None):
     if not path.exists(): return fallback or {}
     try:
@@ -219,7 +184,6 @@ def send_discord_post(title, subtitle, ranking, color, dates, streak_cat=None, p
         "footer": {"text": footer_text}
     }
 
-    import requests
     requests.post(webhook, json={"embeds": [main_embed]})
 
 def get_summed_xp(logs, chars, days=None, month_prefix=None):
@@ -253,8 +217,8 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching official Tibia.com highscores sequentially via Playwright for {len(chars)} characters...")
-    current_totals = asyncio.run(fetch_via_playwright(chars))
+    print(f"🌐 Fetching character totals via TibiaData API for {len(chars)} characters...")
+    current_totals = fetch_via_tibiadata(chars)
     
     current_scrapes = {}
     daily_pb_achievers = []
@@ -266,7 +230,7 @@ def main():
     for name in chars:
         current_xp = current_totals.get(name)
         if current_xp is None:
-            print(f"⚠️ {name}: Not found in Playwright scrape.")
+            print(f"⚠️ {name}: Not found in API scrape.")
             current_scrapes[name] = 0
             continue
             
@@ -287,7 +251,7 @@ def main():
     save_json(BASE_DIR / "totals.json", state_totals)
 
     if total_non_zero == 0 and not current_totals:
-        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch Playwright totals.")
+        print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch API totals.")
         return 
 
     for name, gain in current_scrapes.items():
