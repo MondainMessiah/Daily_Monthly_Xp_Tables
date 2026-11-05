@@ -31,7 +31,7 @@ def get_dates():
     }
 
 # ==========================================
-# 🚀 TIBIADATA DYNAMIC PAGE-FINDER API (Robust Fallback)
+# 🚀 TIBIADATA DYNAMIC PAGE-FINDER API
 # ==========================================
 def fetch_via_tibiadata_highscores(target_names):
     found_chars = {}
@@ -61,13 +61,13 @@ def fetch_via_tibiadata_highscores(target_names):
 
                     if exp_rank:
                         target_page = max(1, (exp_rank // 100) + 1)
-                        pages_to_try = [target_page, target_page - 1, target_page + 1, target_page + 2]
+                        # Page buffer to handle rank movement smoothly
+                        pages_to_try = [target_page, target_page + 1, target_page + 2, target_page + 3, max(1, target_page - 1)]
             
-            # Fallback search range if rank is missing or profile check misses
+            # Fallback range if rank lookup is missing
             if not pages_to_try:
                 pages_to_try = list(range(1, 26))
 
-            # Query the targeted highscore page(s)
             found = False
             for page in pages_to_try:
                 if page < 1: continue
@@ -262,10 +262,8 @@ def main():
         old_total = state_totals.get(name)
         
         if current_xp is None:
-            print(f"⚠️ {name}: Not found in API highscore scrape. Preserving old total.")
+            print(f"⚠️ {name}: Not found in API highscore scrape. Logging 0 XP gain.")
             current_scrapes[name] = 0
-            if old_total is not None:
-                state_totals[name] = old_total 
             continue
             
         if old_total is not None:
