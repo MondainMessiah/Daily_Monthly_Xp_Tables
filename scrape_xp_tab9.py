@@ -31,65 +31,38 @@ def get_dates():
     }
 
 # ==========================================
-# 🚀 TIBIADATA DYNAMIC PAGE-FINDER API
+# 🚀 DEEP HIGHSCORES SWEEP (Pages 1–30)
 # ==========================================
 def fetch_via_tibiadata_highscores(target_names):
     found_chars = {}
     world_slug = WORLD_NAME.lower()
-    
-    for name in target_names:
-        formatted_name = name.strip().lower().replace(" ", "%20")
-        char_url = f"https://api.tibiadata.com/v4/character/{formatted_name}"
-        
+    cached_highscores = {}
+
+    print("🌐 Sweeping highscore pages (1-30) for experience data...")
+    # Sweep pages 1 through 30 to safely cover all active high-level characters on the world
+    for page in range(1, 31):
+        hs_url = f"https://api.tibiadata.com/v4/highscores/{world_slug}/experience/all/{page}"
         try:
-            res = requests.get(char_url, timeout=10)
-            pages_to_try = []
-            
+            res = requests.get(hs_url, timeout=10)
             if res.status_code == 200:
-                char_data = res.json().get("character", {}).get("character", {})
-                if char_data and char_data.get("world", "").lower() == world_slug:
-                    highscores_info = char_data.get("highscores", {})
-                    exp_rank = None
-                    
-                    if isinstance(highscores_info, list):
-                        for hs in highscores_info:
-                            if hs.get("category", "").lower() == "experience":
-                                exp_rank = hs.get("rank")
-                                break
-                    elif isinstance(highscores_info, dict):
-                        exp_rank = highscores_info.get("experience", {}).get("rank")
-
-                    if exp_rank:
-                        target_page = max(1, (exp_rank // 100) + 1)
-                        # Page buffer to handle rank movement smoothly
-                        pages_to_try = [target_page, target_page + 1, target_page + 2, target_page + 3, max(1, target_page - 1)]
-            
-            # Fallback range if rank lookup is missing
-            if not pages_to_try:
-                pages_to_try = list(range(1, 26))
-
-            found = False
-            for page in pages_to_try:
-                if page < 1: continue
-                hs_url = f"https://api.tibiadata.com/v4/highscores/{world_slug}/experience/all/{page}"
-                hs_res = requests.get(hs_url, timeout=10)
-                if hs_res.status_code == 200:
-                    hs_list = hs_res.json().get("highscores", {}).get("highscore_list", [])
-                    if not hs_list and not exp_rank:
-                        break
-                    for entry in hs_list:
-                        if entry.get("name", "").lower() == name.lower():
-                            total_xp = int(entry.get("value", 0))
-                            found_chars[name] = total_xp
-                            print(f"✅ [SUCCESS] {name}: {total_xp:,} XP (Found on page {page})")
-                            found = True
-                            break
-                if found: break
-                
-            if not found:
-                print(f"⚠️ [NOT FOUND] Could not locate {name} in highscores.")
+                hs_list = res.json().get("highscores", {}).get("highscore_list", [])
+                if not hs_list:
+                    break  # Stop early if we hit empty pages beyond active players
+                for entry in hs_list:
+                    c_name = entry.get("name", "")
+                    c_xp = entry.get("value", 0)
+                    cached_highscores[c_name.lower()] = int(c_xp)
         except Exception as e:
-            print(f"❌ [ERROR] API error for {name}: {e}")
+            print(f"❌ [ERROR] API error on highscore page {page}: {e}")
+
+    # Match target characters against the cached highscore table
+    for name in target_names:
+        matched_xp = cached_highscores.get(name.lower())
+        if matched_xp is not None:
+            found_chars[name] = matched_xp
+            print(f"✅ [SUCCESS] {name}: {matched_xp:,} XP")
+        else:
+            print(f"⚠️ [NOT FOUND] {name} was not found in highscores pages 1-30.")
             
     return found_chars
 
@@ -247,7 +220,6 @@ def main():
     if not CHAR_FILE.exists(): return
     with open(CHAR_FILE) as f: chars = [l.strip() for l in f if l.strip()]
 
-    print(f"🌐 Fetching character totals via TibiaData Highscores API for {len(chars)} characters...")
     current_totals = fetch_via_tibiadata_highscores(chars)
     
     current_scrapes = {}
@@ -262,9 +234,14 @@ def main():
         old_total = state_totals.get(name)
         
         if current_xp is None:
-            print(f"⚠️ {name}: Not found in API highscore scrape. Logging 0 XP gain.")
-            current_scrapes[name] = 0
-            continue
+            print(f"⚠️ {name}: Not found in highscores. Preserving last known baseline.")
+            # If not found, preserve the old total instead of forcing 0 XP so we don't break continuity if a page sweep misses someone
+            if old_total is not None:
+                current_scrapes[name] = 0
+                continue
+            else:
+                current_scrapes[name] = 0
+                continue
             
         if old_total is not None:
             gain = current_xp - old_total
