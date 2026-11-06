@@ -39,7 +39,6 @@ def fetch_via_tibiadata_highscores(target_names):
     cached_highscores = {}
 
     print("🌐 Sweeping highscore pages (1-30) for experience data...")
-    # Sweep pages 1 through 30 to safely cover all active high-level characters on the world
     for page in range(1, 31):
         hs_url = f"https://api.tibiadata.com/v4/highscores/{world_slug}/experience/all/{page}"
         try:
@@ -47,7 +46,7 @@ def fetch_via_tibiadata_highscores(target_names):
             if res.status_code == 200:
                 hs_list = res.json().get("highscores", {}).get("highscore_list", [])
                 if not hs_list:
-                    break  # Stop early if we hit empty pages beyond active players
+                    break  
                 for entry in hs_list:
                     c_name = entry.get("name", "")
                     c_xp = entry.get("value", 0)
@@ -55,7 +54,6 @@ def fetch_via_tibiadata_highscores(target_names):
         except Exception as e:
             print(f"❌ [ERROR] API error on highscore page {page}: {e}")
 
-    # Match target characters against the cached highscore table
     for name in target_names:
         matched_xp = cached_highscores.get(name.lower())
         if matched_xp is not None:
@@ -235,19 +233,15 @@ def main():
         
         if current_xp is None:
             print(f"⚠️ {name}: Not found in highscores. Preserving last known baseline.")
-            # If not found, preserve the old total instead of forcing 0 XP so we don't break continuity if a page sweep misses someone
-            if old_total is not None:
-                current_scrapes[name] = 0
-                continue
-            else:
-                current_scrapes[name] = 0
-                continue
+            current_scrapes[name] = 0
+            continue
             
         if old_total is not None:
             gain = current_xp - old_total
             if gain < -MAX_XP_THRESHOLD or gain > MAX_XP_THRESHOLD:
                 gain = 0
         else:
+            # First time recording this character — establish baseline without false gain
             gain = 0
             
         state_totals[name] = current_xp
