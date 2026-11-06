@@ -225,31 +225,38 @@ def main():
     total_non_zero = 0
 
     yesterday = dates['yesterday_iso']
+    
+    # Respect pre-existing valid baselines in totals.json
     state_totals = load_json(BASE_DIR / "totals.json", {})
+    new_state_totals = state_totals.copy()
 
     for name in chars:
         current_xp = current_totals.get(name)
         old_total = state_totals.get(name)
         
+        # If API sweep misses someone, fall back safely to their stored baseline total
         if current_xp is None:
-            print(f"⚠️ {name}: Not found in highscores. Preserving last known baseline.")
-            current_scrapes[name] = 0
-            continue
+            if old_total is not None:
+                print(f"⚠️ {name}: Not found in API sweep. Retaining existing baseline total.")
+                current_xp = old_total
+            else:
+                print(f"⚠️ {name}: Not found and no baseline exists.")
+                current_scrapes[name] = 0
+                continue
             
         if old_total is not None:
             gain = current_xp - old_total
             if gain < -MAX_XP_THRESHOLD or gain > MAX_XP_THRESHOLD:
                 gain = 0
         else:
-            # First time recording this character — establish baseline without false gain
             gain = 0
             
-        state_totals[name] = current_xp
+        new_state_totals[name] = current_xp
         current_scrapes[name] = gain
         if gain != 0: 
             total_non_zero += 1
 
-    save_json(BASE_DIR / "totals.json", state_totals)
+    save_json(BASE_DIR / "totals.json", new_state_totals)
 
     if total_non_zero == 0 and len(current_totals) == 0:
         print(f"🛑 ANTI-ZERO TRIGGERED: Could not fetch API totals.")
