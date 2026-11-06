@@ -1,12 +1,9 @@
 name: Tibia XP Tracker
 
 on:
-  schedule:
-    # 9:00 AM UK time during GMT (Winter / UTC+0)
-    - cron: '0 9 * * *'
-    # 9:00 AM UK time during BST (Summer / UTC+1)
-    - cron: '0 8 * * *'
-  workflow_dispatch: # Allows manual trigger anytime from GitHub Actions tab
+  repository_dispatch:
+    types: [run-xp-scraper]
+  workflow_dispatch: # Allows manual triggers from GitHub UI anytime
 
 jobs:
   track-xp:
